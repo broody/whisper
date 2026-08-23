@@ -33,6 +33,17 @@ export interface BidSubmissionEvent {
   blockNumber: number;
 }
 
+export interface AuctionCreatedEvent {
+  auctionId: bigint;
+  transactionHash: string;
+  blockNumber: number;
+}
+
+export interface WhisperEventBatch {
+  auctions: AuctionCreatedEvent[];
+  submissions: BidSubmissionEvent[];
+}
+
 export interface VaultNote {
   id: bigint;
   token: bigint;
@@ -83,6 +94,11 @@ export interface WhisperChainPort {
     vaultAddress: bigint,
     paymentToken: bigint,
   ): Promise<bigint[]>;
+}
+
+export interface WhisperEventSource {
+  getFinalizedBlockNumber(): Promise<number>;
+  scanEvents(fromBlock: number, toBlock: number): Promise<WhisperEventBatch>;
 }
 
 export interface VaultPort {

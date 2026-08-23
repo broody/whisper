@@ -11,9 +11,13 @@ The operator controls its own privacy account and can see bids as soon as it dis
 - `WhisperSdkCapsuleCipher`: reveal-key access through an injected secret provider.
 - `Strk20VaultClient`: structural adapter for the official Privacy SDK.
 - `OutsideExecutionSubmitter`: proof-backed pool submission through a separate relayer account.
+- `StarknetWhisperChain`: Whisper state/event reads plus transaction-scoped `EncNoteCreated` extraction from the canonical pool.
+- `OperatorWorker`: finalized-block scanning, durable cursors, stale-lease recovery, bid processing, and deadline settlement scheduling.
+- `createOfficialVaultRuntime`: exact `createPrivateTransfers(...)` composition for hosted proving and indexed discovery.
+- `createOperatorService`: validates the chain, pool, vault address, viewing key, and reveal key before listening.
 - `createOperatorApi`: `GET /healthz`, `GET /v1/config`, and idempotent `POST /v1/capsules` endpoints.
 
-Live chain event decoding and canonical-pool receipt inspection remain deployment adapters because their exact ABI and endpoints must match the selected pool deployment. The engine deliberately rejects a submission unless the transaction yields exactly one candidate note that the vault can discover and decrypt.
+The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. Zero matches remain retryable while discovery catches up; multiple matches are rejected, and exactly one match can be accepted before the force-reveal boundary.
 
 ## Build
 
@@ -24,7 +28,15 @@ pnpm build
 pnpm test
 ```
 
-Node 24 or later is required. The production composition root must install `@starkware-libs/starknet-privacy-sdk@0.14.3-rc.5` from GitHub Packages and pass its `createPrivateTransfers(...)` result to `Strk20VaultClient`; see the [official SDK quickstart](https://github.com/starkware-libs/starknet-privacy/blob/main/sdk/README.md), [setup requirements](https://strk20-by-example.org/sdk/setup-requirements), and [note discovery](https://strk20-by-example.org/sdk/note-discovery).
+Node 24 or later is required. Configure GitHub Packages without putting a token in the repository, then install the official SDK:
+
+```sh
+cp .npmrc.example .npmrc
+export GITHUB_PACKAGES_TOKEN="..."
+pnpm add @starkware-libs/starknet-privacy-sdk@0.14.3-rc.5
+```
+
+Do not send or commit the token; `.npmrc` is ignored. The runtime dynamically loads the package and uses its `createPrivateTransfers(...)` entrypoint; see the [official SDK quickstart](https://github.com/starkware-libs/starknet-privacy/blob/main/sdk/README.md), [setup requirements](https://strk20-by-example.org/sdk/setup-requirements), and [note discovery](https://strk20-by-example.org/sdk/note-discovery).
 
 ## Runtime boundaries
 
@@ -36,6 +48,16 @@ The public runtime configuration is loaded by `loadOperatorRuntimeConfig`. Signi
 - the relayer account signer.
 
 `WHISPER_DATABASE_PATH` contains encrypted capsules and idempotency state, not these keys. For production, place capsule rate limiting and request authentication policy at the gateway, run one scheduler leader per database, and deploy this process separately from latency-sensitive game APIs.
+
+`createOperatorService(...)` returns the validated service components. Call `validate()`, then `listen()` and `worker.run(abortSignal)`; vault registration remains a separate explicit `registerVault()` action so process startup can never create an onchain transaction accidentally.
+
+## Sepolia infrastructure
+
+Set `WHISPER_NETWORK=sepolia` to use the deployed Sepolia privacy pool, PublicNode RPC, and StarkWare's publicly reachable alpha-Sepolia discovery and transaction-prover services. Every value can still be overridden with `WHISPER_RPC_URL`, `WHISPER_DISCOVERY_URL`, `WHISPER_PROVING_URL`, `WHISPER_CHAIN_ID`, or `WHISPER_POOL_ADDRESS`.
+
+The hosted alpha-Sepolia services have no published availability commitment. They are suitable for integration testing, while mainnet must use explicitly configured infrastructure; see the [SDK proving configuration](https://strk20-by-example.org/sdk/proving-config).
+
+The hosted discovery service receives the vault viewing key needed to discover notes, and the hosted prover processes the vault's private proof request. Treat both service operators as part of the Sepolia test trust boundary, use disposable accounts and test funds only, and self-host both components for the intended mainnet operator-only custody model.
 
 ## Security status
 

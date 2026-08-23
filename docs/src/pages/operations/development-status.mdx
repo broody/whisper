@@ -1,0 +1,133 @@
+---
+title: Development status
+description: What is implemented, what has been verified locally, and what remains before a live Whisper auction.
+---
+
+# Development status
+
+Whisper's contract, headless SDK, encrypted capsule, and operator orchestration are implemented and verified locally. Live canonical-pool integration is still pending, and the system is experimental and unaudited.
+
+## Repository packages
+
+```text
+contracts/  Cairo auction state, private callbacks, hashes, pricing, and tests
+sdk/        Bid/capsule composition, commitments, encryption, and shared vectors
+operator/   Discovery, note matching, persistence, worker, proving, and relay plumbing
+docs/       Vocs site plus the detailed protocol specification
+vectors/    Cross-language transcript fixtures
+```
+
+## Implemented
+
+### Cairo contract
+
+- token-agnostic auction configuration;
+- pool-only `ComputeAndInvoke` submit, accept, settle, and abort paths;
+- contract-scoped bidder and operator identities;
+- submitted-versus-funded bid state;
+- accepted note ID uniqueness and ordered bid-set commitment;
+- commitment-opening verification;
+- deterministic Vickrey pricing and tie-breaking; and
+- terminal settlement and abort state.
+
+### TypeScript SDK
+
+- Cairo-compatible request encoders and hashes;
+- bid transcript and operator-action builders;
+- authenticated reveal capsules using ECDH, HKDF-SHA256, and AES-256-GCM;
+- refund, proceeds, and winner routing commitments; and
+- shared Cairo/TypeScript test vectors.
+
+### Operator
+
+- idempotent capsule upload and public configuration API;
+- SQLite WAL persistence with five-second busy timeout;
+- Whisper event scanning and durable block cursor;
+- pool receipt `EncNoteCreated` extraction;
+- vault note discovery and transaction-scoped intersection;
+- retryable discovery lag and ambiguous-note rejection;
+- bid/capsule/note validation;
+- private bid acceptance and Vickrey settlement planning;
+- stale work-lease recovery and deadline scheduling;
+- official Privacy SDK composition boundary;
+- proof-backed outside-execution relaying; and
+- startup validation without automatic onchain actions.
+
+## Current local verification
+
+```text
+Cairo contract tests   25 passing
+Headless SDK tests      9 passing
+Operator tests         11 passing
+```
+
+Typechecking, production builds, Cairo formatting, and repository whitespace checks also pass.
+
+## External integration boundary
+
+The operator dynamically loads `@starkware-libs/starknet-privacy-sdk@0.14.3-rc.5`, which is distributed through GitHub Packages. Local registry authentication is required before it can be installed and exercised directly.
+
+Copy the provided registry template and supply the token only in your local environment:
+
+```sh
+cd operator
+cp .npmrc.example .npmrc
+export GITHUB_PACKAGES_TOKEN="..."
+pnpm add @starkware-libs/starknet-privacy-sdk@0.14.3-rc.5
+```
+
+Do not commit `.npmrc` or send the token to another service. The repository ignores the local file.
+
+## Live configuration still required
+
+The integration run needs:
+
+- a Starknet RPC endpoint;
+- canonical pool address and verified ABI;
+- hosted proving and discovery endpoints;
+- a deployed Whisper contract and deployment block;
+- a registered vault account and its secret-manager-backed viewing/signing keys;
+- a separate reveal key and relayer account;
+- a payment token supported by the pool; and
+- disposable low-value accounts for the first full lifecycle test.
+
+## First live test
+
+The smallest meaningful integration exercise is:
+
+1. Validate the configured chain, pool, Whisper deployment, and public keys.
+2. Register the service-owned vault through the explicit registration action.
+3. Shield a small amount in a separate transaction and wait for the note to mature.
+4. Submit one exact-value private bid note and Whisper callback in the same batch.
+5. Verify event scanning, note discovery, correlation, capsule validation, and funding acceptance.
+6. Advance into the force-reveal window and settle.
+7. Discover the loser/winner/seller output notes and reconcile their amounts.
+
+No mainnet registration or transaction should happen implicitly at process startup. Registration, deployment, and live transactions are separate operator actions.
+
+Use the official [SDK setup requirements](https://strk20-by-example.org/sdk/setup-requirements), [registration](https://strk20-by-example.org/sdk/register), [note discovery](https://strk20-by-example.org/sdk/note-discovery), and [multi-operation batch](https://strk20-by-example.org/sdk/multi-op-batch) guides during this test.
+
+## Before meaningful funds
+
+- complete the live canonical-pool lifecycle;
+- define key backup, rotation, and incident procedures;
+- add request authentication and rate limits to capsule upload;
+- add worker alerts before `abort_after`;
+- back up and test recovery of the operator database;
+- obtain independent Cairo and cryptographic review; and
+- document the custodial risk in every bidder-facing integration.
+
+## Run the documentation locally
+
+```sh
+cd docs
+pnpm install
+pnpm dev
+```
+
+Vocs serves the site at the URL printed by the dev command. A production check is:
+
+```sh
+pnpm typecheck
+pnpm build
+```

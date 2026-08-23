@@ -20,6 +20,7 @@ interface SubmissionRow {
   note_id: string | null;
   result_tx_hash: string | null;
   error: string | null;
+  updated_at: number;
 }
 
 interface SettlementRow {
@@ -27,6 +28,7 @@ interface SettlementRow {
   status: SettlementStatus;
   transaction_hash: string | null;
   error: string | null;
+  updated_at: number;
 }
 
 export class SqliteOperatorStore implements OperatorStore {
@@ -63,6 +65,15 @@ export class SqliteOperatorStore implements OperatorStore {
         transaction_hash TEXT,
         error TEXT,
         updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS tracked_auctions (
+        auction_id TEXT PRIMARY KEY
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS operator_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
       ) STRICT;
     `);
   }
@@ -162,6 +173,7 @@ export class SqliteOperatorStore implements OperatorStore {
     return {
       auctionId: BigInt(row.auction_id),
       status: row.status,
+      updatedAt: row.updated_at,
       ...(row.transaction_hash === null ? {} : { transactionHash: row.transaction_hash }),
       ...(row.error === null ? {} : { error: row.error }),
     };
@@ -204,6 +216,66 @@ export class SqliteOperatorStore implements OperatorStore {
       .run(auctionId.toString(), transactionHash, Date.now());
   }
 
+  async trackAuction(auctionId: bigint): Promise<void> {
+    this.database
+      .prepare("INSERT INTO tracked_auctions (auction_id) VALUES (?) ON CONFLICT DO NOTHING")
+      .run(auctionId.toString());
+  }
+
+  async listTrackedAuctions(): Promise<bigint[]> {
+    const rows = this.database
+      .prepare("SELECT auction_id FROM tracked_auctions ORDER BY length(auction_id), auction_id")
+      .all() as { auction_id: string }[];
+    return rows.map((row) => BigInt(row.auction_id));
+  }
+
+  async getLastScannedBlock(): Promise<number | undefined> {
+    const row = this.database
+      .prepare("SELECT value FROM operator_metadata WHERE key = 'last_scanned_block'")
+      .get() as { value: string } | undefined;
+    return row === undefined ? undefined : Number(row.value);
+  }
+
+  async setLastScannedBlock(blockNumber: number): Promise<void> {
+    if (!Number.isSafeInteger(blockNumber) || blockNumber < 0) {
+      throw new RangeError("blockNumber must be a non-negative safe integer");
+    }
+    this.database
+      .prepare(
+        `INSERT INTO operator_metadata (key, value) VALUES ('last_scanned_block', ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(String(blockNumber));
+  }
+
+  async listProcessableSubmissions(limit: number): Promise<SubmissionRecord[]> {
+    if (!Number.isSafeInteger(limit) || limit <= 0) throw new RangeError("limit must be positive");
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM submissions WHERE status IN ('received', 'retry')
+         ORDER BY block_number, auction_id, bid_handle LIMIT ?`,
+      )
+      .all(limit) as unknown as SubmissionRow[];
+    return rows.map(submissionFromRow);
+  }
+
+  async recoverStaleWork(staleBefore: number): Promise<number> {
+    const now = Date.now();
+    const submissions = this.database
+      .prepare(
+        `UPDATE submissions SET status = 'retry', error = 'recovered stale acceptance lease',
+           updated_at = ? WHERE status = 'accepting' AND updated_at < ?`,
+      )
+      .run(now, staleBefore);
+    const settlements = this.database
+      .prepare(
+        `UPDATE settlements SET status = 'retry', error = 'recovered stale settlement lease',
+           updated_at = ? WHERE status = 'settling' AND updated_at < ?`,
+      )
+      .run(now, staleBefore);
+    return Number(submissions.changes) + Number(settlements.changes);
+  }
+
   private updateSubmission(
     auctionId: bigint,
     bidHandle: bigint,
@@ -241,6 +313,7 @@ function submissionFromRow(row: SubmissionRow): SubmissionRecord {
     transactionHash: row.source_tx_hash,
     blockNumber: row.block_number,
     status: row.status,
+    updatedAt: row.updated_at,
     ...(row.note_id === null ? {} : { noteId: BigInt(row.note_id) }),
     ...(row.result_tx_hash === null ? {} : { transactionHashResult: row.result_tx_hash }),
     ...(row.error === null ? {} : { error: row.error }),

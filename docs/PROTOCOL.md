@@ -1,6 +1,6 @@
 # Whisper Private Vickrey Auction Protocol
 
-**Status:** Canonical-pool contract, SDK capsule plumbing, and operator core implemented; live chain adapters pending; custodial and unaudited
+**Status:** Canonical-pool contract, SDK capsule plumbing, and operator chain/worker adapters implemented; live service verification pending; custodial and unaudited
 **Updated:** 2026-08-23
 
 ## Decision
@@ -220,14 +220,17 @@ Implemented in the operator and SDK application layer:
 - exact note/commitment/amount validation with ambiguous-note rejection;
 - private refund, winner-change, and proceeds settlement planning;
 - structural official-SDK and relayed outside-execution adapters; and
-- public configuration and idempotent capsule upload HTTP endpoints.
+- public configuration and idempotent capsule upload HTTP endpoints;
+- finalized Whisper event scanning with a durable block cursor;
+- canonical-pool `EncNoteCreated` receipt extraction and vault-note intersection; and
+- stale worker lease recovery and deadline settlement scheduling.
 
 Still required for a live auction:
 
 - backend vault account lifecycle and production secret-manager bindings;
 - key rotation and independent review of the capsule format;
-- deployed-pool event decoding and transaction-scoped output-note derivation;
-- the official SDK composition root using real discovery, proving, and relay services;
+- authenticated installation of the official SDK package;
+- live verification of the deployed pool ABI, discovery, proving, and relay services;
 - durable event polling, scheduling, worker leases, alerting, and recovery automation;
 - mainnet configuration and deployment verification;
 - independent Cairo and operational security review.

@@ -34,7 +34,7 @@ contracts/       Cairo auction contract, interfaces, pricing, hashes, and tests
 sdk/             ComputeAndInvoke builders, transcript hashes, and encrypted bid capsules
 operator/        Vault note matching, persistence, HTTP plumbing, and settlement engine
 vectors/         Shared Cairo and TypeScript transcript fixtures
-docs/PROTOCOL.md Detailed lifecycle, custody model, and security boundaries
+docs/            Vocs guide plus the protocol and security reference
 ```
 
 The Cairo package can be consumed as a Scarb dependency:
@@ -61,7 +61,7 @@ Before settlement, bid amounts, bidder wallets, refund destinations, and winner 
 
 The vault is a privacy account controlled by the auction operator. The STRK20 pool proves note ownership, prevents double spending, and conserves value, while the Whisper contract verifies the Vickrey result. The operator is responsible for matching notes to bids and constructing the promised refund and proceeds outputs. Bidders therefore trust the operator to settle or return escrowed funds.
 
-A normal dapp must never handle a user's viewing key, notes, or proofs. User actions belong behind a compatible wallet interface; only the backend-controlled vault service holds its own viewing key. See [the protocol specification](docs/PROTOCOL.md) and the [STRK20 actions and proofs guide](https://strk20-by-example.org/actions-and-proofs) for details.
+A normal dapp must never handle a user's viewing key, notes, or proofs. User actions belong behind a compatible wallet interface; only the backend-controlled vault service holds its own viewing key. Start with the [Vocs walkthrough](docs/src/pages/how-whisper-works.mdx), then use [the protocol specification](docs/PROTOCOL.md) and the [STRK20 actions and proofs guide](https://strk20-by-example.org/actions-and-proofs) for details.
 
 ## Develop
 
@@ -82,6 +82,11 @@ pnpm install
 pnpm typecheck
 pnpm build
 pnpm test
+
+cd ../docs
+pnpm install
+pnpm typecheck
+pnpm build
 ```
 
 Whisper is experimental and unaudited. Do not use it with real funds until the Cairo contracts, cryptographic transcript, capsule format, and operator infrastructure have received independent review.

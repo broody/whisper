@@ -1,0 +1,28 @@
+{
+  "name": "@whisper-trade/docs",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "vocs build",
+    "preview": "vocs preview"
+  },
+  "dependencies": {
+    "mermaid": "11.17.0",
+    "react": "^19",
+    "react-dom": "^19",
+    "vocs": "2.8.5",
+    "waku": "1.0.0-beta.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.0.2",
+    "@types/node": "^24",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5",
+    "vite": "8.2.2"
+  }
+}

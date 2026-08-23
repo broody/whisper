@@ -30,6 +30,7 @@ interface UpstreamTokenBuilder {
 }
 
 interface UpstreamBuilder {
+  register(): this;
   with(token: bigint, operations: (builder: UpstreamTokenBuilder) => void): this;
   computeAndInvoke(builder: ComputeAndInvokeBuilder): this;
   execute(): Promise<{ callAndProof: CallAndProof }>;
@@ -73,6 +74,11 @@ export class Strk20VaultClient implements VaultPort {
       sender: BigInt(note.sender),
       opaque: note,
     }));
+  }
+
+  async register(): Promise<TransactionResult> {
+    const result = await this.transfers.build().register().execute();
+    return this.submitter.submit(result.callAndProof);
   }
 
   async acceptBid(

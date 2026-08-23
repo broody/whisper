@@ -12,12 +12,26 @@ import {
   type WhisperBidOpening,
   type WhisperEncryptedCapsule,
 } from "@whisper-trade/sdk";
+import {
+  Account,
+  constants,
+  hash,
+  type EventFilter,
+  type ProviderInterface,
+  type SignerInterface,
+} from "starknet";
 
 import { createOperatorApi } from "./api.ts";
 import { WhisperSdkCapsuleCipher } from "./capsule-cipher.ts";
+import { loadOperatorRuntimeConfig } from "./config.ts";
 import { WhisperOperator } from "./engine.ts";
+import { SEPOLIA_OPERATOR_NETWORK } from "./networks.ts";
+import { createOfficialVaultRuntime, type OfficialPrivacySdkModule } from "./official-sdk.ts";
+import { createOperatorService } from "./service.ts";
+import { StarknetWhisperChain } from "./starknet-chain.ts";
 import { SqliteOperatorStore } from "./sqlite-store.ts";
 import { InMemoryOperatorStore, type OperatorStore } from "./store.ts";
+import type { PrivateTransfersLike } from "./strk20-vault.ts";
 import type {
   AuctionView,
   BidSubmissionEvent,
@@ -26,7 +40,9 @@ import type {
   VaultNote,
   VaultPort,
   WhisperChainPort,
+  WhisperEventSource,
 } from "./types.ts";
+import { OperatorWorker } from "./worker.ts";
 
 const chainId = 0x534e5f4d41494en;
 const poolAddress = 0x111n;
@@ -154,6 +170,7 @@ async function bidFixture(input: {
 }
 
 function setup(store: OperatorStore = new InMemoryOperatorStore()) {
+  let nowSeconds = 75;
   const chain = new MemoryChain();
   const proceedsRecipient = 0x999n;
   chain.auction = {
@@ -178,9 +195,17 @@ function setup(store: OperatorStore = new InMemoryOperatorStore()) {
       { getRevealPrivateKey: async () => revealPrivateKey },
     ),
     proceedsRecipients: { getProceedsRecipient: async () => proceedsRecipient },
-    clock: { nowSeconds: () => 200 },
+    clock: { nowSeconds: () => nowSeconds },
   });
-  return { chain, vault, store, operator };
+  return {
+    chain,
+    vault,
+    store,
+    operator,
+    setNowSeconds(value: number) {
+      nowSeconds = value;
+    },
+  };
 }
 
 test("matches one transaction-scoped note and accepts a funded bid", async () => {
@@ -204,6 +229,29 @@ test("matches one transaction-scoped note and accepts a funded bid", async () =>
   assert.deepEqual(context.vault.accepted, [{ auctionId: 7n, bidHandle: 10n, noteId: 101n }]);
 });
 
+test("retries while the transaction-scoped note is waiting for discovery", async () => {
+  const context = setup();
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    amount: 100n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+  await context.store.putCapsule(fixture.envelope);
+
+  const waiting = await context.operator.ingestSubmission(fixture.event);
+  assert.equal(waiting.status, "retry");
+  assert.match(waiting.error ?? "", /not discoverable yet/);
+
+  context.vault.notes.push(fixture.note);
+  const funded = await context.operator.processSubmission(7n, 10n);
+  assert.equal(funded.status, "funded");
+  assert.equal(funded.noteId, 101n);
+});
+
 test("fails closed when a submission transaction creates multiple candidate notes", async () => {
   const context = setup();
   const fixture = await bidFixture({
@@ -225,6 +273,28 @@ test("fails closed when a submission transaction creates multiple candidate note
   assert.equal(context.vault.accepted.length, 0);
 });
 
+test("rejects a bid that was not accepted before force reveal", async () => {
+  const context = setup();
+  context.setNowSeconds(100);
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    amount: 100n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+  context.vault.notes.push(fixture.note);
+  await context.store.putCapsule(fixture.envelope);
+
+  const result = await context.operator.ingestSubmission(fixture.event);
+
+  assert.equal(result.status, "rejected");
+  assert.match(result.error ?? "", /acceptance window is closed/);
+  assert.equal(context.vault.accepted.length, 0);
+});
+
 test("constructs a complete Vickrey settlement with private refunds and change", async () => {
   const context = setup();
   const fixtures = await Promise.all([
@@ -241,6 +311,7 @@ test("constructs a complete Vickrey settlement with private refunds and change",
     assert.equal((await context.operator.ingestSubmission(fixture.event)).status, "funded");
   }
 
+  context.setNowSeconds(200);
   const plan = await context.operator.settleAuction(7n);
 
   assert.ok(plan);
@@ -337,3 +408,259 @@ test("serves public vault configuration and accepts idempotent capsule uploads",
     );
   }
 });
+
+test("decodes Whisper state/events and pool note IDs from Starknet RPC", async () => {
+  const pool = 0x111n;
+  const whisper = 0x222n;
+  const bidSubmittedSelector = hash.getSelectorFromName("BidSubmitted");
+  const auctionCreatedSelector = hash.getSelectorFromName("AuctionCreated");
+  const encNoteCreatedSelector = hash.getSelectorFromName("EncNoteCreated");
+  const auctionValues = [
+    7n, 0x1n, 0x444n, 0x555n, 0x6n, 0x7n, 50n, 2n, 90n, 100n, 300n,
+    0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 2n, 2n, 1n, 0n, 0n,
+  ].map(hex);
+  const bid = (handle: bigint, noteId: bigint) =>
+    [7n, handle, handle + 1n, noteId, handle + 2n, handle + 3n, handle + 4n, 80n, 1n, 0n]
+      .map(hex);
+  const provider = {
+    async callContract(call: { entrypoint: string; calldata?: readonly string[] }) {
+      if (call.entrypoint === "get_pool_address") return [hex(pool)];
+      if (call.entrypoint === "get_auction") return auctionValues;
+      if (call.entrypoint === "get_bid_handle") {
+        return [BigInt(call.calldata?.[1] ?? 0) === 0n ? "0xa" : "0x14"];
+      }
+      if (call.entrypoint === "get_bid") {
+        const handle = BigInt(call.calldata?.[1] ?? 0);
+        return bid(handle, handle === 10n ? 101n : 102n);
+      }
+      throw new Error(`unexpected call: ${call.entrypoint}`);
+    },
+    async getBlockNumber() {
+      return 123;
+    },
+    async getEvents(filter: EventFilter) {
+      const selector = (filter as unknown as { keys: string[][] }).keys[0]![0];
+      if (BigInt(selector!) === BigInt(auctionCreatedSelector)) {
+        return {
+          events: [{
+            from_address: hex(whisper),
+            keys: [auctionCreatedSelector, "0x7", "0x1"],
+            data: [],
+            transaction_hash: "0xaaa",
+            block_number: 120,
+          }],
+        };
+      }
+      if (BigInt(selector!) === BigInt(bidSubmittedSelector)) {
+        return {
+          events: [{
+            from_address: hex(whisper),
+            keys: [bidSubmittedSelector, "0x7", "0xa"],
+            data: ["0x0"],
+            transaction_hash: "0xbbb",
+            block_number: 121,
+          }],
+        };
+      }
+      throw new Error("unexpected event selector");
+    },
+    async getTransactionReceipt() {
+      return {
+        events: [
+          { from_address: hex(pool), keys: [encNoteCreatedSelector, "0x65"], data: ["0x1"] },
+          { from_address: hex(pool), keys: [encNoteCreatedSelector, "0x66"], data: ["0x2"] },
+          { from_address: hex(whisper), keys: [bidSubmittedSelector, "0x7", "0xa"], data: [] },
+        ],
+      };
+    },
+  } as unknown as ProviderInterface;
+  const chain = new StarknetWhisperChain(provider, whisper, pool);
+
+  await chain.assertConfiguredPool();
+  const auction = await chain.getAuction(7n);
+  const bids = await chain.getAcceptedBids(7n);
+  const events = await chain.scanEvents(120, 123);
+  const candidates = await chain.candidateVaultNoteIds("0xbbb", 0x333n, 0x444n);
+
+  assert.equal(auction.status, "bidding");
+  assert.equal(auction.bidCount, 2);
+  assert.deepEqual(bids.map((value) => value.bidHandle), [10n, 20n]);
+  assert.deepEqual(events.auctions.map((value) => value.auctionId), [7n]);
+  assert.deepEqual(events.submissions.map((value) => value.bidHandle), [10n]);
+  assert.deepEqual(candidates, [101n, 102n]);
+});
+
+test("scans finalized events into durable worker state and schedules ready auctions", async () => {
+  const store = new InMemoryOperatorStore();
+  const processed: string[] = [];
+  const settled: bigint[] = [];
+  const fakeOperator = {
+    async processSubmission(auctionId: bigint, bidHandle: bigint) {
+      processed.push(`${auctionId}:${bidHandle}`);
+    },
+    async settleAuction(auctionId: bigint) {
+      settled.push(auctionId);
+    },
+  } as unknown as WhisperOperator;
+  const eventSource: WhisperEventSource = {
+    getFinalizedBlockNumber: async () => 12,
+    scanEvents: async () => ({
+      auctions: [{ auctionId: 7n, transactionHash: "0xaaa", blockNumber: 11 }],
+      submissions: [{
+        auctionId: 7n,
+        bidHandle: 10n,
+        transactionHash: "0xbbb",
+        blockNumber: 12,
+      }],
+    }),
+  };
+  const chain = {
+    getAuction: async () => ({
+      id: 7n,
+      paymentToken: 0x444n,
+      proceedsRecipientCommitment: 0x555n,
+      reservePrice: 50n,
+      forceRevealAfter: 100,
+      abortAfter: 300,
+      vaultAddress,
+      acceptedBidsHash: 0xabcn,
+      bidCount: 1,
+      status: "bidding" as const,
+    }),
+  } as unknown as WhisperChainPort;
+  const worker = new OperatorWorker(fakeOperator, chain, eventSource, store, {
+    deploymentBlock: 10,
+    clock: { nowSeconds: () => 200 },
+  });
+
+  const result = await worker.runOnce();
+
+  assert.equal(result.scannedToBlock, 12);
+  assert.equal(result.eventsRecorded, 2);
+  assert.deepEqual(processed, ["7:10"]);
+  assert.deepEqual(settled, [7n]);
+  assert.equal(await store.getLastScannedBlock(), 12);
+  assert.deepEqual(await store.listTrackedAuctions(), [7n]);
+});
+
+test("composes the official SDK with injected key and provider boundaries", async () => {
+  let captured: Parameters<OfficialPrivacySdkModule["createPrivateTransfers"]>[0] | undefined;
+  const transfers = {
+    discoverNotes: async () => ({ notes: new Map() }),
+    build: () => {
+      throw new Error("not used");
+    },
+  } as unknown as PrivateTransfersLike;
+  const sdkModule: OfficialPrivacySdkModule = {
+    createPrivateTransfers(input) {
+      captured = input;
+      return transfers;
+    },
+  };
+  const viewingKeyProvider = { getViewingKey: async () => 0x123n };
+  const runtime = await createOfficialVaultRuntime({
+    account: { address: vaultAddress, signer: {} as SignerInterface },
+    viewingKeyProvider,
+    provingUrl: "https://prover.example.com",
+    discoveryUrl: "https://discovery.example.com",
+    rpcUrl: "https://rpc.example.com",
+    chainId: constants.StarknetChainId.SN_MAIN,
+    poolAddress,
+    whisperAddress,
+    submitter: { submit: async () => ({ transactionHash: "0x1" }) },
+    sdkModule,
+  });
+
+  assert.equal(runtime.transfers, transfers);
+  assert.equal(captured?.viewingKeyProvider, viewingKeyProvider);
+  assert.equal(captured?.poolContractAddress, poolAddress);
+  assert.equal(captured?.provingProvider.chainId, constants.StarknetChainId.SN_MAIN);
+});
+
+test("loads the Sepolia prover, discovery, RPC, and pool preset", () => {
+  const config = loadOperatorRuntimeConfig({
+    WHISPER_NETWORK: "sepolia",
+    WHISPER_CONTRACT_ADDRESS: "0x111",
+    WHISPER_VAULT_ADDRESS: "0x222",
+    WHISPER_VAULT_PUBLIC_KEY: "0x333",
+    WHISPER_REVEAL_PUBLIC_KEY: "0x444",
+    WHISPER_DEPLOYMENT_BLOCK: "123",
+  });
+
+  assert.equal(config.chainId, SEPOLIA_OPERATOR_NETWORK.chainId);
+  assert.equal(config.rpcUrl, `${SEPOLIA_OPERATOR_NETWORK.rpcUrl}/`);
+  assert.equal(config.discoveryUrl, `${SEPOLIA_OPERATOR_NETWORK.discoveryUrl}/`);
+  assert.equal(config.provingUrl, `${SEPOLIA_OPERATOR_NETWORK.provingUrl}/`);
+  assert.equal(config.poolAddress, SEPOLIA_OPERATOR_NETWORK.poolAddress);
+});
+
+test("allows explicit endpoint overrides on the Sepolia preset", () => {
+  const config = loadOperatorRuntimeConfig({
+    WHISPER_NETWORK: "sepolia",
+    WHISPER_PROVING_URL: "https://self-hosted-prover.example",
+    WHISPER_CONTRACT_ADDRESS: "0x111",
+    WHISPER_VAULT_ADDRESS: "0x222",
+    WHISPER_VAULT_PUBLIC_KEY: "0x333",
+    WHISPER_REVEAL_PUBLIC_KEY: "0x444",
+    WHISPER_DEPLOYMENT_BLOCK: "123",
+  });
+
+  assert.equal(config.provingUrl, "https://self-hosted-prover.example/");
+  assert.equal(config.discoveryUrl, `${SEPOLIA_OPERATOR_NETWORK.discoveryUrl}/`);
+});
+
+test("assembles and validates the service without persisting its key material", async () => {
+  const viewingKey = 0x456n;
+  const capsuleKey = 0x789n;
+  const signer = {} as SignerInterface;
+  const transfers = {
+    discoverNotes: async () => ({ notes: new Map() }),
+    build: () => {
+      throw new Error("not used");
+    },
+  } as unknown as PrivateTransfersLike;
+  const provider = {
+    getChainId: async () => constants.StarknetChainId.SN_MAIN,
+    callContract: async (call: { entrypoint: string }) => {
+      if (call.entrypoint === "get_pool_address") return [hex(poolAddress)];
+      throw new Error("unexpected call");
+    },
+  } as unknown as ProviderInterface;
+  const vaultAccount = { address: hex(vaultAddress), signer } as unknown as Account;
+  const service = await createOperatorService({
+    config: {
+      chainId,
+      rpcUrl: "https://rpc.example.com/",
+      discoveryUrl: "https://discovery.example.com/",
+      provingUrl: "https://prover.example.com/",
+      poolAddress,
+      whisperAddress,
+      vaultAddress,
+      vaultPublicKey: deriveWhisperRevealPublicKey(viewingKey),
+      revealPublicKey: deriveWhisperRevealPublicKey(capsuleKey),
+      databasePath: ":memory:",
+      allowedOrigins: [],
+      deploymentBlock: 1,
+      apiHost: "127.0.0.1",
+      apiPort: 8081,
+      pollIntervalMilliseconds: 10_000,
+    },
+    provider,
+    vaultAccount,
+    relayerAccount: { address: "0xabc" } as unknown as Account,
+    viewingKeyProvider: { getViewingKey: async () => viewingKey },
+    revealKeyProvider: { getRevealPrivateKey: async () => capsuleKey },
+    proceedsRecipients: { getProceedsRecipient: async () => 0x999n },
+    sdkModule: { createPrivateTransfers: () => transfers },
+  });
+  try {
+    await service.validate();
+    assert.deepEqual(await service.store.listTrackedAuctions(), []);
+  } finally {
+    await service.close();
+  }
+});
+
+function hex(value: bigint): string {
+  return `0x${value.toString(16)}`;
+}

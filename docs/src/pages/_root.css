@@ -1,0 +1,19 @@
+:root {
+  --vocs-content-width: 840px;
+}
+
+.Vocs_Content code {
+  font-variant-ligatures: none;
+}
+
+.Vocs_Content table {
+  font-size: 0.92rem;
+}
+
+.Vocs_Content blockquote {
+  border-left-color: #7c3aed;
+}
+
+[data-v-mermaid-chart] {
+  margin-block: 2rem;
+}

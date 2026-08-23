@@ -71,6 +71,9 @@ export class WhisperOperator {
         return (await store.getSubmission(auctionId, bidHandle))!;
       }
       if (auction.status !== "bidding") throw new RejectedBidError("auction is not bidding");
+      if (this.clock.nowSeconds() >= auction.forceRevealAfter) {
+        throw new RejectedBidError("bid acceptance window is closed");
+      }
       if (auction.vaultAddress <= 0n) throw new RejectedBidError("auction vault is invalid");
 
       const envelope = await store.getCapsule(bid.revealCommitment);
@@ -86,6 +89,9 @@ export class WhisperOperator {
       const candidateNotes = discovered.filter(
         (note) => note.token === auction.paymentToken && candidateIds.has(note.id.toString()),
       );
+      if (candidateNotes.length === 0) {
+        throw new RetryableOperatorError("vault note is not discoverable yet");
+      }
       if (candidateNotes.length !== 1) {
         throw new RejectedBidError(
           `submission must create exactly one discoverable vault note; found ${candidateNotes.length}`,

@@ -25,6 +25,7 @@
     "test": "tsc -p tsconfig.json && node --test dist/*.test.js"
   },
   "dependencies": {
+    "@starkware-libs/starknet-privacy-sdk": "0.14.3-rc.5",
     "@whisper-trade/sdk": "link:../sdk",
     "starknet": "10.7.1"
   },
