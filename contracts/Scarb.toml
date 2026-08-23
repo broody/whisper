@@ -1,0 +1,19 @@
+[package]
+name = "whisper"
+version = "0.1.0"
+edition = "2024_07"
+license = "Apache-2.0"
+description = "Whisper private Vickrey auctions for any STRK20-supported ERC-20"
+homepage = "https://whisper.trade"
+
+[cairo]
+sierra-replace-ids = true
+
+[dependencies]
+starknet = "2.13.1"
+
+[[target.starknet-contract]]
+
+[dev-dependencies]
+cairo_test = "2.13.1"
+snforge_std = "0.60.0"

@@ -1,0 +1,10 @@
+/contracts/target/
+/contracts/.snfoundry_cache/
+/node_modules/
+**/node_modules/
+**/dist/
+/.pnpm-store/
+.DS_Store
+.env
+.env.*
+!.env.example
