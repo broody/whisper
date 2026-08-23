@@ -19,5 +19,17 @@ export {
   computeBidHandle,
   computeIdentityCommitment,
   computeOperatorIdentityCommitment,
+  computeProceedsRecipientCommitment,
+  computeRefundCommitment,
   computeRevealCommitment,
 } from "./hashes.js";
+export {
+  decryptWhisperBidCapsule,
+  deriveWhisperRevealPublicKey,
+  encryptWhisperBidCapsule,
+  WHISPER_CAPSULE_ALGORITHM,
+  WHISPER_CAPSULE_VERSION,
+  type WhisperBidOpening,
+  type WhisperCapsuleContext,
+  type WhisperEncryptedCapsule,
+} from "./capsule.js";

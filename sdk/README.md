@@ -30,7 +30,34 @@ const result = await transfers.build().computeAndInvoke(action).execute();
 
 The application must compose that callback with exactly one exact-value private transfer to the auction's configured vault account in the same pool batch. The helper does not move funds itself, and it intentionally does not require the newly created encrypted-note ID; the operator derives that from the batch events before accepting the bid.
 
-It must also use hybrid authenticated encryption for the amount opening and refund/winner routing material under the auction's separate `revealPublicKey`, then upload that capsule for the operator. Capsule encryption is intentionally not implemented until the wire format and audited crypto dependency are selected.
+It also uses authenticated hybrid encryption for the amount opening and refund routing material under the auction's separate `revealPublicKey`, then uploads that capsule for the operator.
+
+The SDK provides the experimental v1 capsule plumbing:
+
+```ts
+import {
+  computeRefundCommitment,
+  computeRevealCommitment,
+  encryptWhisperBidCapsule,
+} from "@whisper-trade/sdk";
+
+const refundCommitment = computeRefundCommitment(refundRecipient);
+const revealCommitment = computeRevealCommitment(
+  auctionId,
+  amount,
+  salt,
+  refundCommitment,
+  winnerCommitment,
+);
+
+const capsule = await encryptWhisperBidCapsule(
+  { auctionId, amount, salt, refundRecipient, refundCommitment, winnerCommitment },
+  auction.revealPublicKey,
+  { chainId, poolAddress, whisperAddress, auctionId, revealCommitment },
+);
+```
+
+Upload the returned envelope to the operator before submitting the private bid batch. The format uses Stark-curve ECDH, HKDF-SHA256, and AES-256-GCM; it is experimental and requires independent cryptographic review.
 
 It never accepts an identity key or viewing key. STRK20 derives the Whisper-scoped identity inside the proven computation and prepends it to `privacy_compute`.
 

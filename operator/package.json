@@ -1,0 +1,35 @@
+{
+  "name": "@whisper-trade/operator",
+  "version": "0.1.0",
+  "description": "1-of-1 STRK20 vault operator for Whisper auctions",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "pnpm --dir ../sdk build",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --dir ../sdk build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "pretest": "pnpm --dir ../sdk build",
+    "test": "tsc -p tsconfig.json && node --test dist/*.test.js"
+  },
+  "dependencies": {
+    "@whisper-trade/sdk": "link:../sdk",
+    "starknet": "10.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2"
+  }
+}

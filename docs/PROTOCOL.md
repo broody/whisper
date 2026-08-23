@@ -1,6 +1,6 @@
 # Whisper Private Vickrey Auction Protocol
 
-**Status:** Canonical-pool contract and SDK plumbing implemented; operator worker pending; custodial and unaudited
+**Status:** Canonical-pool contract, SDK capsule plumbing, and operator core implemented; live chain adapters pending; custodial and unaudited
 **Updated:** 2026-08-23
 
 ## Decision
@@ -78,7 +78,7 @@ refund commitment
 winner commitment
 ```
 
-It also uses hybrid authenticated encryption to seal a reveal capsule to `reveal_public_key`. The capsule contains at least `auction_id`, `amount`, `salt`, refund output routing, and the application-defined winner payload. It is uploaded to the operator service under `reveal_commitment` (or another content-addressed key) and is never placed in public settlement calldata before the deadline. AEAD context must include the chain ID, pool address, Whisper address, and auction ID to prevent replay across deployments.
+It also uses authenticated hybrid encryption to seal a reveal capsule to `reveal_public_key`. The v1 SDK format uses Stark-curve ECDH, HKDF-SHA256, and AES-256-GCM. The capsule contains `auction_id`, `amount`, `salt`, refund output routing, and the winner commitment. It is uploaded to the operator service under `reveal_commitment` and is never placed in public settlement calldata before the deadline. Authenticated context includes the chain ID, pool address, Whisper address, auction ID, and reveal commitment to prevent replay across deployments.
 
 The shared transcripts are:
 
@@ -213,13 +213,22 @@ Implemented in `v0.2.0`:
 - TypeScript encoders and Cairo-compatible Poseidon helpers;
 - cross-language vectors and negative-path tests.
 
-Still required for a runnable auction:
+Implemented in the operator and SDK application layer:
 
-- backend vault account lifecycle and secure viewing-key storage;
-- an AEAD reveal-capsule format, key rotation policy, and authenticated upload endpoint;
-- note discovery/decryption and submission matching;
-- real private-transfer composition for bid, refund, change, and proceeds;
-- durable settlement/retry/indexing logic;
+- authenticated encrypted reveal capsules and domain-separated routing commitments;
+- SQLite-backed capsule and idempotency state without key persistence;
+- exact note/commitment/amount validation with ambiguous-note rejection;
+- private refund, winner-change, and proceeds settlement planning;
+- structural official-SDK and relayed outside-execution adapters; and
+- public configuration and idempotent capsule upload HTTP endpoints.
+
+Still required for a live auction:
+
+- backend vault account lifecycle and production secret-manager bindings;
+- key rotation and independent review of the capsule format;
+- deployed-pool event decoding and transaction-scoped output-note derivation;
+- the official SDK composition root using real discovery, proving, and relay services;
+- durable event polling, scheduling, worker leases, alerting, and recovery automation;
 - mainnet configuration and deployment verification;
 - independent Cairo and operational security review.
 

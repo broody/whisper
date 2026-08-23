@@ -31,7 +31,8 @@ Whisper uses the privacy pool's encrypted-note and `ComputeAndInvoke` operations
 
 ```text
 contracts/       Cairo auction contract, interfaces, pricing, hashes, and tests
-sdk/             ComputeAndInvoke builders and matching TypeScript hash helpers
+sdk/             ComputeAndInvoke builders, transcript hashes, and encrypted bid capsules
+operator/        Vault note matching, persistence, HTTP plumbing, and settlement engine
 vectors/         Shared Cairo and TypeScript transcript fixtures
 docs/PROTOCOL.md Detailed lifecycle, custody model, and security boundaries
 ```
@@ -56,7 +57,7 @@ import {
 
 ## Privacy and custody
 
-Before settlement, bid amounts, bidder wallets, refund destinations, and winner payloads remain private. Auction configuration, bid handles, commitments, note IDs, timing, and bid counts are public. Settlement publishes the accepted bid amounts, winning bid, clearing price, and winning commitment; private-note recipients remain hidden.
+Before settlement, bid amounts, bidder wallets, refund destinations, and winner payloads remain hidden from the public and other bidders. The 1-of-1 operator can decrypt bid amounts as soon as it discovers their notes and capsules. Auction configuration, bid handles, commitments, note IDs, timing, and bid counts are public. Settlement publishes the accepted bid amounts, winning bid, clearing price, and winning commitment; private-note recipients remain hidden.
 
 The vault is a privacy account controlled by the auction operator. The STRK20 pool proves note ownership, prevents double spending, and conserves value, while the Whisper contract verifies the Vickrey result. The operator is responsible for matching notes to bids and constructing the promised refund and proceeds outputs. Bidders therefore trust the operator to settle or return escrowed funds.
 
@@ -71,6 +72,12 @@ scarb build
 snforge test
 
 cd ../sdk
+pnpm install
+pnpm typecheck
+pnpm build
+pnpm test
+
+cd ../operator
 pnpm install
 pnpm typecheck
 pnpm build

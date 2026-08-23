@@ -3,11 +3,18 @@ import test from "node:test";
 
 import { buildWhisperBidAction, encodeWhisperBidIntent } from "./bid-action.ts";
 import {
+  computeProceedsRecipientCommitment,
+  computeRefundCommitment,
   computeBidHandle,
   computeIdentityCommitment,
   computeOperatorIdentityCommitment,
   computeRevealCommitment,
 } from "./hashes.ts";
+import {
+  decryptWhisperBidCapsule,
+  deriveWhisperRevealPublicKey,
+  encryptWhisperBidCapsule,
+} from "./capsule.ts";
 import {
   buildWhisperAbortAction,
   buildWhisperAcceptBidAction,
@@ -144,4 +151,46 @@ test("rejects inconsistent settlement winners", () => {
       }),
     /winnerBidHandle must be non-zero/,
   );
+});
+
+test("encrypts, authenticates, and decrypts a bid capsule", async () => {
+  const revealPrivateKey = 0x12345n;
+  const revealPublicKey = deriveWhisperRevealPublicKey(revealPrivateKey);
+  const refundRecipient = 0x987n;
+  const refundCommitment = computeRefundCommitment(refundRecipient);
+  const winnerCommitment = 0x456n;
+  const opening = {
+    auctionId: 7n,
+    amount: 100n,
+    salt: 0x777n,
+    refundRecipient,
+    refundCommitment,
+    winnerCommitment,
+  };
+  const revealCommitment = computeRevealCommitment(
+    opening.auctionId,
+    opening.amount,
+    opening.salt,
+    opening.refundCommitment,
+    opening.winnerCommitment,
+  );
+  const context = {
+    chainId: 0x534e5f4d41494en,
+    poolAddress: 0x111n,
+    whisperAddress: 0x222n,
+    auctionId: opening.auctionId,
+    revealCommitment,
+  };
+
+  const envelope = await encryptWhisperBidCapsule(opening, revealPublicKey, context);
+  const decrypted = await decryptWhisperBidCapsule(envelope, revealPrivateKey, context);
+
+  assert.deepEqual(decrypted, opening);
+  await assert.rejects(
+    decryptWhisperBidCapsule(envelope, revealPrivateKey, { ...context, whisperAddress: 0x223n }),
+  );
+});
+
+test("derives domain-separated routing commitments", () => {
+  assert.notEqual(computeRefundCommitment(0x123n), computeProceedsRecipientCommitment(0x123n));
 });

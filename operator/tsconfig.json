@@ -12,13 +12,8 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2024",
+    "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": [
-    "src/index.ts",
-    "src/bid-action.ts",
-    "src/capsule.ts",
-    "src/hashes.ts",
-    "src/operator-actions.ts"
-  ]
+  "include": ["src/**/*.ts"]
 }
