@@ -7,13 +7,12 @@
   "input": {
     "identityKey": "0xabc",
     "auctionId": "0x1",
-    "noteId": "0x704",
-    "capsuleHash": "0x701",
+    "revealCommitment": "0x701",
     "refundCommitment": "0x702",
     "winnerCommitment": "0x703"
   },
   "output": {
     "identityCommitment": "0x388934032e394e858e5fd474159ead3a6dd48d0419c2a4b9ffa38c353b72ef1",
-    "bidHandle": "0x3d1d493a715d646b29f80a915b17c9b9248c8f35b1289aef7be88888a6453c5"
+    "bidHandle": "0x11c9d1b216ef5e67b87296fe6d25da64c546d2d1a95af2de7a56e37a7abaf5b"
   }
 }

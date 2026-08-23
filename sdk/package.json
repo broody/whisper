@@ -1,6 +1,6 @@
 {
   "name": "@whisper-trade/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "STRK20 action builders for Whisper private auctions",
   "type": "module",
   "license": "Apache-2.0",

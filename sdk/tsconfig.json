@@ -8,6 +8,7 @@
     "noUncheckedIndexedAccess": true,
     "outDir": "dist",
     "rootDir": "src",
+    "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2024",
@@ -16,6 +17,7 @@
   "include": [
     "src/index.ts",
     "src/bid-action.ts",
-    "src/hashes.ts"
+    "src/hashes.ts",
+    "src/operator-actions.ts"
   ]
 }

@@ -1,55 +1,80 @@
 # Whisper
 
-Private sealed-bid auctions on Starknet, built around real encrypted STRK20 notes.
+Whisper is a reusable Cairo and TypeScript library for private, token-agnostic Vickrey auctions on Starknet. Bidders escrow encrypted STRK20 notes, the highest bid wins, and the winner pays the greater of the reserve price and the second-highest bid.
 
-Whisper starts with a reusable, token-agnostic Vickrey auction contract; NFT listing, custody, marketplace, indexer, and frontend layers remain adapters around the generic settlement result.
+The auction result exposes a generic winner commitment, allowing games, NFT marketplaces, allocation systems, and other applications to define what the winner receives without adding application-specific behavior to the auction contract.
 
-## Repository layout
+## Auction model
+
+Each auction defines:
+
+- an ERC-20 payment token supported by the configured STRK20 privacy pool;
+- a reserve price and maximum number of accepted bids;
+- bidding, force-reveal, and abort deadlines;
+- an operator-controlled private vault;
+- a private proceeds recipient; and
+- application metadata and a winner-payload domain.
+
+Bids contain an amount commitment, a private refund destination, and an application-defined winner commitment. One auction-scoped private identity may submit one bid. Ties are resolved deterministically by bid handle.
+
+## How it works
+
+1. The bidder privately transfers an encrypted note worth their bid to the auction vault and submits the bid commitments in the same STRK20 operation batch.
+2. The operator matches the incoming note with the submission, verifies the encrypted reveal capsule, and marks the bid as funded.
+3. After bidding closes, the operator opens every accepted bid and constructs a settlement batch.
+4. The contract verifies the complete bid set, commitment openings, winner, and Vickrey clearing price.
+5. The settlement returns each losing bid, returns the winner's excess, and sends the clearing price to the proceeds recipient as private notes.
+
+Whisper uses the privacy pool's encrypted-note and `ComputeAndInvoke` operations. The operator associates each accepted bid with the encrypted note created for the vault.
+
+## Packages
 
 ```text
-contracts/       Standalone Cairo/Scarb package and Starknet Foundry tests
-sdk/             Headless STRK20 ComputeAndInvoke action builder
-vectors/         Canonical Cairo/TypeScript transcript fixtures
-docs/PROTOCOL.md Privacy, force-reveal, settlement, and integration specification
+contracts/       Cairo auction contract, interfaces, pricing, hashes, and tests
+sdk/             ComputeAndInvoke builders and matching TypeScript hash helpers
+vectors/         Shared Cairo and TypeScript transcript fixtures
+docs/PROTOCOL.md Detailed lifecycle, custody model, and security boundaries
 ```
 
-Future application code can live under `apps/` without adding web or marketplace assumptions to the contract package.
+The Cairo package can be consumed as a Scarb dependency:
 
-## Contract status
+```toml
+[dependencies]
+whisper = { path = "../whisper/contracts" }
+```
 
-Implemented:
+The headless SDK exports builders for bid submission, funded-bid acceptance, settlement, and abort:
 
-- Any ERC-20 supported by the configured STRK20 privacy pool.
-- Multiple concurrent single-winner Vickrey auctions.
-- Public auction configuration and opaque encrypted-note bid records.
-- STRK20-compatible `privacy_compute` and pool-only `privacy_invoke_with_computation` bid metadata path.
-- Auction-scoped proven identity and canonical bid transcript hashes.
-- Pool-only bid, batch force-reveal settlement, and recovery entrypoints.
-- Complete ordered bid-set commitment and deterministic tie-breaking.
-- Generic `winner_commitment` for NFT, game, allocation, or other adapters.
-- Winner commitments bound at bid time rather than accepted from reveal calldata.
-- Eighteen Cairo tests and four SDK tests, including a shared Poseidon transcript vector.
+```ts
+import {
+  buildWhisperBidAction,
+  buildWhisperAcceptBidAction,
+  buildWhisperSettlementAction,
+  buildWhisperAbortAction,
+} from "@whisper-trade/sdk";
+```
 
-Still required for an end-to-end private auction:
+## Privacy and custody
 
-- STRK20 pool/prover actions for encrypted note locking and proof-backed settlement.
-- Restricted auction vault and 1-of-1 force-reveal operator.
-- Encrypted-note ID exposure/derivation in the SDK bid composition flow.
-- Independent Cairo and cryptographic review.
+Before settlement, bid amounts, bidder wallets, refund destinations, and winner payloads remain private. Auction configuration, bid handles, commitments, note IDs, timing, and bid counts are public. Settlement publishes the accepted bid amounts, winning bid, clearing price, and winning commitment; private-note recipients remain hidden.
 
-The current unmodified pool can authenticate Whisper's private identity and bid-metadata leg, but it cannot prove that the referenced note is newly escrowed to the vault or bind its hidden amount to the auction rules. A successful metadata action is therefore not yet a valid escrowed bid.
+The vault is a privacy account controlled by the auction operator. The STRK20 pool proves note ownership, prevents double spending, and conserves value, while the Whisper contract verifies the Vickrey result. The operator is responsible for matching notes to bids and constructing the promised refund and proceeds outputs. Bidders therefore trust the operator to settle or return escrowed funds.
+
+A normal dapp must never handle a user's viewing key, notes, or proofs. User actions belong behind a compatible wallet interface; only the backend-controlled vault service holds its own viewing key. See [the protocol specification](docs/PROTOCOL.md) and the [STRK20 actions and proofs guide](https://strk20-by-example.org/actions-and-proofs) for details.
 
 ## Develop
 
 ```sh
 cd contracts
+scarb fmt --check
 scarb build
 snforge test
 
 cd ../sdk
 pnpm install
 pnpm typecheck
+pnpm build
 pnpm test
 ```
 
-Experimental and unaudited. Do not deploy to mainnet in its current form.
+Whisper is experimental and unaudited. Do not use it with real funds until the Cairo contracts, cryptographic transcript, capsule format, and operator infrastructure have received independent review.

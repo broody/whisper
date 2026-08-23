@@ -3,8 +3,7 @@ export type FeltLike = bigint | number | string;
 export interface WhisperBidIntent {
   whisperAddress: string;
   auctionId: FeltLike;
-  noteId: FeltLike;
-  capsuleHash: FeltLike;
+  revealCommitment: FeltLike;
   refundCommitment: FeltLike;
   winnerCommitment: FeltLike;
 }
@@ -19,32 +18,56 @@ export interface ComputeAndInvokeDetails {
 /** Compatible with `PrivateTransfersBuilder.computeAndInvoke(...)`. */
 export type ComputeAndInvokeBuilder = (_args: unknown) => ComputeAndInvokeDetails;
 
-const MAX_U64 = (1n << 64n) - 1n;
+export const MAX_U64 = (1n << 64n) - 1n;
+export const MAX_U128 = (1n << 128n) - 1n;
+export const MAX_FELT = (1n << 251n) + 17n * (1n << 192n);
 
-function positiveFelt(name: string, value: FeltLike): bigint {
+export function felt(name: string, value: FeltLike): bigint {
   let parsed: bigint;
   try {
     parsed = BigInt(value);
   } catch {
     throw new TypeError(`${name} must be bigint-compatible`);
   }
-  if (parsed <= 0n) {
+  if (parsed < 0n) {
+    throw new RangeError(`${name} must be non-negative`);
+  }
+  if (parsed > MAX_FELT) {
+    throw new RangeError(`${name} exceeds felt252`);
+  }
+  return parsed;
+}
+
+export function positiveFelt(name: string, value: FeltLike): bigint {
+  const parsed = felt(name, value);
+  if (parsed === 0n) {
     throw new RangeError(`${name} must be non-zero`);
+  }
+  return parsed;
+}
+
+export function u64(name: string, value: FeltLike): bigint {
+  const parsed = positiveFelt(name, value);
+  if (parsed > MAX_U64) {
+    throw new RangeError(`${name} exceeds u64`);
+  }
+  return parsed;
+}
+
+export function u128(name: string, value: FeltLike): bigint {
+  const parsed = felt(name, value);
+  if (parsed > MAX_U128) {
+    throw new RangeError(`${name} exceeds u128`);
   }
   return parsed;
 }
 
 /** Serializes `BidIntent` in the exact Cairo field order. */
 export function encodeWhisperBidIntent(intent: WhisperBidIntent): bigint[] {
-  const auctionId = positiveFelt("auctionId", intent.auctionId);
-  if (auctionId > MAX_U64) {
-    throw new RangeError("auctionId exceeds u64");
-  }
-
   return [
-    auctionId,
-    positiveFelt("noteId", intent.noteId),
-    positiveFelt("capsuleHash", intent.capsuleHash),
+    0n, // PrivacyRequest::SubmitBid
+    u64("auctionId", intent.auctionId),
+    positiveFelt("revealCommitment", intent.revealCommitment),
     positiveFelt("refundCommitment", intent.refundCommitment),
     positiveFelt("winnerCommitment", intent.winnerCommitment),
   ];
