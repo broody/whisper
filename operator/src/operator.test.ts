@@ -31,7 +31,7 @@ import { createOperatorService } from "./service.ts";
 import { StarknetWhisperChain } from "./starknet-chain.ts";
 import { SqliteOperatorStore } from "./sqlite-store.ts";
 import { InMemoryOperatorStore, type OperatorStore } from "./store.ts";
-import type { PrivateTransfersLike } from "./strk20-vault.ts";
+import { Strk20VaultClient, type PrivateTransfersLike } from "./strk20-vault.ts";
 import type {
   AuctionView,
   BidSubmissionEvent,
@@ -252,7 +252,49 @@ test("retries while the transaction-scoped note is waiting for discovery", async
   assert.equal(funded.noteId, 101n);
 });
 
-test("fails closed when a submission transaction creates multiple candidate notes", async () => {
+test("rejects a discovered vault note whose amount does not match the capsule", async () => {
+  const context = setup();
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    amount: 100n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+  context.vault.notes.push({ ...fixture.note, amount: 99n });
+  await context.store.putCapsule(fixture.envelope);
+
+  const result = await context.operator.ingestSubmission(fixture.event);
+
+  assert.equal(result.status, "rejected");
+  assert.match(result.error ?? "", /matches capsule amount/);
+  assert.equal(context.vault.accepted.length, 0);
+});
+
+test("matches the committed bid amount when the transaction also creates change", async () => {
+  const context = setup();
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    amount: 100n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [101n, 102n]);
+  context.vault.notes.push(fixture.note, { ...fixture.note, id: 102n, amount: 900n });
+  await context.store.putCapsule(fixture.envelope);
+
+  const result = await context.operator.ingestSubmission(fixture.event);
+
+  assert.equal(result.status, "funded");
+  assert.equal(result.noteId, 101n);
+  assert.deepEqual(context.vault.accepted, [{ auctionId: 7n, bidHandle: 10n, noteId: 101n }]);
+});
+
+test("fails closed when a submission creates multiple matching candidate notes", async () => {
   const context = setup();
   const fixture = await bidFixture({
     auctionId: 7n,
@@ -575,6 +617,84 @@ test("composes the official SDK with injected key and provider boundaries", asyn
   assert.equal(captured?.viewingKeyProvider, viewingKeyProvider);
   assert.equal(captured?.poolContractAddress, poolAddress);
   assert.equal(captured?.provingProvider.chainId, constants.StarknetChainId.SN_MAIN);
+  assert.deepEqual(captured?.discoveryProvider, { url: "https://discovery.example.com/" });
+});
+
+test("composes direct pool discovery for Sepolia testing", async () => {
+  let captured: Parameters<OfficialPrivacySdkModule["createPrivateTransfers"]>[0] | undefined;
+  const transfers = {
+    discoverNotes: async () => ({ notes: new Map() }),
+    build: () => {
+      throw new Error("not used");
+    },
+  } as unknown as PrivateTransfersLike;
+  await createOfficialVaultRuntime({
+    account: { address: vaultAddress, signer: {} as SignerInterface },
+    viewingKeyProvider: { getViewingKey: async () => 0x123n },
+    provingUrl: "https://prover.example.com",
+    discoveryUrl: "https://unused-indexer.example.com",
+    discoveryMode: "contract",
+    rpcUrl: "https://rpc.example.com",
+    chainId: constants.StarknetChainId.SN_MAIN,
+    poolAddress,
+    whisperAddress,
+    submitter: { submit: async () => ({ transactionHash: "0x1" }) },
+    sdkModule: {
+      createPrivateTransfers(input) {
+        captured = input;
+        return transfers;
+      },
+    },
+  });
+
+  assert.ok(captured !== undefined);
+  assert.ok("discoverNotes" in captured.discoveryProvider);
+  assert.equal(typeof captured.discoveryProvider.discoverNotes, "function");
+  assert.equal(typeof captured.discoveryProvider.discoverChannels, "function");
+});
+
+test("proves vault actions against the configured finalized block", async () => {
+  let executeOptions: { provingBlockId?: number } | undefined;
+  const callAndProof = {
+    call: { contractAddress: "0x1", entrypoint: "apply_actions", calldata: [] },
+    proof: { data: "proof", proofFacts: [] },
+  };
+  const builder = {
+    register() {
+      return this;
+    },
+    with() {
+      return this;
+    },
+    computeAndInvoke() {
+      return this;
+    },
+    async execute(options?: { provingBlockId?: number }) {
+      executeOptions = options;
+      return { callAndProof };
+    },
+  };
+  const transfers = {
+    discoverNotes: async () => ({ notes: new Map() }),
+    build: () => builder,
+  } as unknown as PrivateTransfersLike;
+  const submitted: unknown[] = [];
+  const vault = new Strk20VaultClient(
+    transfers,
+    {
+      submit: async (input) => {
+        submitted.push(input);
+        return { transactionHash: "0x1" };
+      },
+    },
+    "0x222",
+    async () => 123,
+  );
+
+  await vault.register();
+
+  assert.deepEqual(executeOptions, { provingBlockId: 123 });
+  assert.deepEqual(submitted, [callAndProof]);
 });
 
 test("loads the Sepolia prover, discovery, RPC, and pool preset", () => {
@@ -589,9 +709,11 @@ test("loads the Sepolia prover, discovery, RPC, and pool preset", () => {
 
   assert.equal(config.chainId, SEPOLIA_OPERATOR_NETWORK.chainId);
   assert.equal(config.rpcUrl, `${SEPOLIA_OPERATOR_NETWORK.rpcUrl}/`);
+  assert.equal(config.discoveryMode, "contract");
   assert.equal(config.discoveryUrl, `${SEPOLIA_OPERATOR_NETWORK.discoveryUrl}/`);
   assert.equal(config.provingUrl, `${SEPOLIA_OPERATOR_NETWORK.provingUrl}/`);
   assert.equal(config.poolAddress, SEPOLIA_OPERATOR_NETWORK.poolAddress);
+  assert.equal(config.provingBlockLag, 10);
 });
 
 test("allows explicit endpoint overrides on the Sepolia preset", () => {
@@ -631,6 +753,7 @@ test("assembles and validates the service without persisting its key material", 
     config: {
       chainId,
       rpcUrl: "https://rpc.example.com/",
+      discoveryMode: "indexer",
       discoveryUrl: "https://discovery.example.com/",
       provingUrl: "https://prover.example.com/",
       poolAddress,
@@ -641,6 +764,7 @@ test("assembles and validates the service without persisting its key material", 
       databasePath: ":memory:",
       allowedOrigins: [],
       deploymentBlock: 1,
+      provingBlockLag: 10,
       apiHost: "127.0.0.1",
       apiPort: 8081,
       pollIntervalMilliseconds: 10_000,

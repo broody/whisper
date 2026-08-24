@@ -40,23 +40,29 @@ The 1-of-1 operator can decrypt bid capsules and vault notes as soon as they are
 4. Add a relayed outside-execution submitter that carries proof facts and proof data into the pool call.
 5. Verify capsule authentication, ambiguous-note rejection, exact note/commitment matching, Vickrey outputs, SQLite state, and HTTP idempotency in automated tests.
 
-## 6. Phase 2 — canonical pool and Whisper chain adapters ⛔ blocked 2026-08-23: dedicated funded accounts and a deployed Whisper contract required
+## 6. Phase 2 — canonical pool and Whisper chain adapters ✅ done 2026-08-23
 
 1. Install the official Privacy SDK from GitHub Packages and construct `createPrivateTransfers` with the vault's account signer, viewing-key provider, proving provider, discovery provider, and canonical pool address.
 2. Generate a typed Whisper contract client from the built ABI for auction and accepted-bid reads.
-3. Decode `BidSubmitted` events and inspect the matching pool transaction receipt for output note IDs, retrying zero matches during discovery lag and rejecting multiple candidate notes for the configured vault and token.
+3. Decode `BidSubmitted` events and inspect the matching pool transaction receipt for output note IDs, retrying zero matches during discovery lag and requiring exactly one vault note whose decrypted amount matches the authenticated capsule. Other outputs, such as private change, are allowed.
 4. Add a durable event cursor and worker leases, then drive `WhisperOperator.ingestSubmission` and `settleAuction` from an event/scheduler loop.
 5. Register the vault, set up its required recipient channels, and verify the public configuration endpoint against the registered keys.
 
 Implemented locally: official SDK composition boundary, Whisper state/event decoder, canonical-pool `EncNoteCreated` receipt inspection, durable event cursor, stale worker leases, settlement scheduler, service assembly, and startup validation. The official `@starkware-libs/starknet-privacy-sdk@0.14.3-rc.5` package is installed through ephemeral GitHub Packages authentication, and its real `createPrivateTransfers` export loads successfully.
 
-Sepolia validation completed so far: the official pool address and an RPC 0.10.2 endpoint were confirmed, and the official discovery-service container followed Sepolia heads through a local TLS-terminating proxy. The published transaction-prover container exits with signal 132 (`Illegal instruction`) on this Apple Silicon Docker host in both its amd64-emulated and arm64 variants. No Whisper account was created and no onchain registration or deployment was attempted; the only local Sepolia credentials found belonged to Stake Wars and were deliberately not reused.
+Sepolia validation completed so far: the official pool address and an RPC 0.10.2 endpoint were confirmed. The published transaction-prover container exits with signal 132 (`Illegal instruction`) on this Apple Silicon Docker host in both its amd64-emulated and arm64 variants, so Sepolia uses StarkWare's public prover for now. Dedicated disposable vault and relayer accounts were deployed without reusing Stake Wars credentials, `WhisperAuction` was declared and deployed against the canonical Sepolia pool, and the vault viewing key was registered successfully through a proof-backed pool transaction. The hosted alpha-Sepolia discovery endpoint currently returns 404 for the registered vault, while direct contract discovery succeeds, so the Sepolia preset uses the SDK's direct discovery provider until a compatible indexer is available. Public deployment metadata is recorded in `deployments/sepolia.json`; all private account, viewing, and reveal material remains outside the repository in owner-only files.
+
+The first live bid smoke test found that the initial Whisper callback returned a legacy two-value tuple. The canonical pool decodes exactly one `Span<OpenNoteDeposit>` and rejected the trailing value with `INVALID_INVOKE_RETURN_DATA`. The corrected class was declared and deployed at `0x01a0027cf3cee829e991691543ea455d1fdcf2fc7296837243ff0cf35d742083`.
+
+Auction 2 then completed the live path through funding acceptance: a mature encrypted STRK note was discovered, a private self-transfer created an exact bid note and change while submitting `BidSubmitted` in the same proven transaction, and the operator matched the authenticated capsule amount to the correct output. A callback-only acceptance proof was rejected by the canonical pool with `NO_REPLAY_PROTECTION`; consuming and reissuing a separate vault change note in the same batch supplied the required nullifier without spending the bid note. `BidFunded` is confirmed onchain. Public transaction and deployment metadata is recorded in `deployments/sepolia.json`; the opening, capsule, and all keys remain in owner-only files outside the repository.
+
+After the force-reveal deadline, the operator decrypted the authenticated capsule, consumed the accepted bid note, and completed proof-backed settlement through the canonical pool. The single 0.2 STRK bid won and paid the 0.1 STRK reserve under Vickrey pricing; the 0.1 STRK winner change and 0.1 STRK seller proceeds were reissued as private notes. Auction 2 is `Settled` onchain.
 
 The operator now has an explicit `sepolia` preset for the deployed pool, PublicNode RPC, and the publicly reachable StarkWare alpha-Sepolia discovery and transaction-prover endpoints. The prover responded with RPC spec `0.10.3-rc.2`, and the official SDK reported discovery status `OK`, on 2026-08-23. These endpoints have no published availability commitment, so they remain replaceable environment configuration rather than mainnet dependencies.
 
 ## 7. Phase 3 — mainnet integration and operational hardening
 
-1. Exercise register → private bid transfer/callback → discovery → accept → settlement against the canonical pool with disposable low-value accounts.
+1. Repeat the Sepolia-verified register → private bid transfer/callback → discovery → accept → settlement lifecycle against the canonical mainnet pool with disposable low-value accounts.
 2. Move all four keys into the deployment secret manager; keep them out of SQLite, logs, images, and repository files.
 3. Deploy the operator separately from Stake Wars' Go API/Torii machine, with one durable database, health checks, request-size limits, capsule upload rate limiting, job alerts, and backups.
 4. Add recovery-manifest/refund automation and alert before `abort_after`.
@@ -84,8 +90,8 @@ Mainnet registration, deployment, and transactions require explicit approval whe
 - Current Privacy SDK release, package-registry authentication, proving URL, discovery URL, and relayer submission requirements.
 - Confirm whether the alpha-Sepolia proving and discovery services are formally supported for sprint teams; until then, treat them as replaceable test infrastructure.
 - Run a self-hosted transaction prover for mainnet operator settlement; bidders should shield through a privacy-enabled wallet so the operator prover does not need to originate screened deposits.
-- Create and fund dedicated disposable Whisper Sepolia vault and relayer accounts; do not reuse Stake Wars deployment credentials.
-- Exact sequencing/maturity requirements for vault registration, channel setup, acceptance, and settlement transactions.
+- Design and automate a durable inventory of vault-owned replay-protection notes for operator-only acceptance transactions; a bare `ComputeAndInvoke` callback is rejected as `NO_REPLAY_PROTECTION`.
+- Re-verify the exact sequencing and maturity requirements for settlement and consecutive replay-baton rotations.
 - Capsule cryptographic review and key-rotation policy.
 - Committee-ready custody remains deferred in [GitHub issue #1](https://github.com/broody/whisper/issues/1) until the Sepolia end-to-end path works.
 

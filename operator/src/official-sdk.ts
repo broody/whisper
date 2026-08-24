@@ -1,4 +1,11 @@
-import type { BigNumberish, SignerInterface, constants } from "starknet";
+import { Contract, RpcProvider } from "starknet";
+import type { BigNumberish, BlockIdentifier, SignerInterface, constants } from "starknet";
+import { PrivacyPoolABI } from "@starkware-libs/starknet-privacy-sdk/abi";
+import { ContractDiscoveryProvider } from "@starkware-libs/starknet-privacy-sdk/testing";
+import type {
+  DiscoveryProviderConfig,
+  DiscoveryProviderInterface,
+} from "@starkware-libs/starknet-privacy-sdk";
 import type { FeltLike } from "@whisper-trade/sdk";
 
 import {
@@ -22,7 +29,7 @@ export interface OfficialPrivacySdkModule {
       chainId: constants.StarknetChainId;
       nodeUrl: string;
     };
-    discoveryProvider: { url: string };
+    discoveryProvider: DiscoveryProviderConfig | DiscoveryProviderInterface;
     poolContractAddress: BigNumberish;
   }): PrivateTransfersLike;
 }
@@ -32,11 +39,13 @@ export interface OfficialVaultRuntimeOptions {
   viewingKeyProvider: VaultViewingKeyProvider;
   provingUrl: string;
   discoveryUrl: string;
+  discoveryMode?: "indexer" | "contract";
   rpcUrl: string;
   chainId: constants.StarknetChainId;
   poolAddress: bigint;
   whisperAddress: bigint;
   submitter: ProofSubmitter;
+  provingBlockIdProvider?: () => Promise<BlockIdentifier>;
   /** Test/embedding override; production loads the optional peer package. */
   sdkModule?: OfficialPrivacySdkModule;
 }
@@ -51,6 +60,7 @@ export async function createOfficialVaultRuntime(
   options: OfficialVaultRuntimeOptions,
 ): Promise<OfficialVaultRuntime> {
   const sdk = options.sdkModule ?? (await loadOfficialPrivacySdk());
+  const discoveryProvider = createDiscoveryProvider(options);
   const transfers = sdk.createPrivateTransfers({
     account: options.account,
     viewingKeyProvider: options.viewingKeyProvider,
@@ -59,7 +69,7 @@ export async function createOfficialVaultRuntime(
       chainId: options.chainId,
       nodeUrl: requiredHttpUrl("rpcUrl", options.rpcUrl),
     },
-    discoveryProvider: { url: requiredHttpUrl("discoveryUrl", options.discoveryUrl) },
+    discoveryProvider,
     poolContractAddress: options.poolAddress,
   });
   return {
@@ -68,8 +78,24 @@ export async function createOfficialVaultRuntime(
       transfers,
       options.submitter,
       `0x${options.whisperAddress.toString(16)}`,
+      options.provingBlockIdProvider,
     ),
   };
+}
+
+function createDiscoveryProvider(
+  options: OfficialVaultRuntimeOptions,
+): DiscoveryProviderConfig | DiscoveryProviderInterface {
+  if ((options.discoveryMode ?? "indexer") === "indexer") {
+    return { url: requiredHttpUrl("discoveryUrl", options.discoveryUrl) };
+  }
+  const provider = new RpcProvider({ nodeUrl: requiredHttpUrl("rpcUrl", options.rpcUrl) });
+  const pool = new Contract({
+    abi: PrivacyPoolABI,
+    address: `0x${options.poolAddress.toString(16)}`,
+    providerOrAccount: provider,
+  }).typedv2(PrivacyPoolABI);
+  return new ContractDiscoveryProvider(pool);
 }
 
 async function loadOfficialPrivacySdk(): Promise<OfficialPrivacySdkModule> {

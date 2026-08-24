@@ -86,22 +86,28 @@ export class WhisperOperator {
         ),
       );
       const discovered = await vault.discoverNotes(auction.paymentToken);
+      const opening = await this.dependencies.capsules.decrypt(envelope, {
+        auctionId,
+        revealCommitment: bid.revealCommitment,
+      });
       const candidateNotes = discovered.filter(
         (note) => note.token === auction.paymentToken && candidateIds.has(note.id.toString()),
       );
       if (candidateNotes.length === 0) {
         throw new RetryableOperatorError("vault note is not discoverable yet");
       }
-      if (candidateNotes.length !== 1) {
+      const matchingNotes = candidateNotes.filter(
+        (note) => note.amount === BigInt(opening.amount),
+      );
+      if (matchingNotes.length === 0) {
+        throw new RejectedBidError("no candidate vault note matches capsule amount");
+      }
+      if (matchingNotes.length !== 1) {
         throw new RejectedBidError(
-          `submission must create exactly one discoverable vault note; found ${candidateNotes.length}`,
+          `submission must create exactly one matching vault note; found ${matchingNotes.length}`,
         );
       }
-      const note = candidateNotes[0]!;
-      const opening = await this.dependencies.capsules.decrypt(envelope, {
-        auctionId,
-        revealCommitment: bid.revealCommitment,
-      });
+      const note = matchingNotes[0]!;
       validateOpening(auction.reservePrice, bid, note, opening);
 
       const claimed = await store.claimSubmission(auctionId, bidHandle);

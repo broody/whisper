@@ -17,7 +17,9 @@ The operator controls its own privacy account and can see bids as soon as it dis
 - `createOperatorService`: validates the chain, pool, vault address, viewing key, and reveal key before listening.
 - `createOperatorApi`: `GET /healthz`, `GET /v1/config`, and idempotent `POST /v1/capsules` endpoints.
 
-The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. Zero matches remain retryable while discovery catches up; multiple matches are rejected, and exactly one match can be accepted before the force-reveal boundary.
+The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. The encrypted capsule is authenticated before matching, zero amount-matching notes remain retryable while discovery catches up, and multiple matching notes are rejected. Unrelated private change is allowed.
+
+The canonical pool rejects an operator-only `ComputeAndInvoke` proof with no private state transition as `NO_REPLAY_PROTECTION`. Acceptance must consume and reissue a separate vault-owned replay note in the same batch; it must not spend the escrowed bid note. Durable replay-note selection and rotation is the remaining operator integration layer.
 
 ## Build
 
@@ -53,7 +55,9 @@ The public runtime configuration is loaded by `loadOperatorRuntimeConfig`. Signi
 
 ## Sepolia infrastructure
 
-Set `WHISPER_NETWORK=sepolia` to use the deployed Sepolia privacy pool, PublicNode RPC, and StarkWare's publicly reachable alpha-Sepolia discovery and transaction-prover services. Every value can still be overridden with `WHISPER_RPC_URL`, `WHISPER_DISCOVERY_URL`, `WHISPER_PROVING_URL`, `WHISPER_CHAIN_ID`, or `WHISPER_POOL_ADDRESS`.
+Set `WHISPER_NETWORK=sepolia` to use the deployed Sepolia privacy pool, PublicNode RPC, direct contract discovery, and StarkWare's publicly reachable alpha-Sepolia transaction-prover service. Direct discovery is slower but avoids depending on an indexer while validating the integration. Set `WHISPER_DISCOVERY_MODE=indexer` with `WHISPER_DISCOVERY_URL` when a compatible hosted or self-managed discovery service is available; every endpoint and address can be overridden explicitly.
+
+`WHISPER_PROVING_BLOCK_LAG` defaults to 10. Each proof uses the current RPC head minus this lag so the resulting proof fact is old enough for the pool's acceptance window; do not replace it with `latest` unless the deployed pool explicitly accepts proofs from the head block.
 
 The hosted alpha-Sepolia services have no published availability commitment. They are suitable for integration testing, while mainnet must use explicitly configured infrastructure; see the [SDK proving configuration](https://strk20-by-example.org/sdk/proving-config).
 

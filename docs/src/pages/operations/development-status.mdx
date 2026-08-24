@@ -5,7 +5,7 @@ description: What is implemented, what has been verified locally, and what remai
 
 # Development status
 
-Whisper's contract, headless SDK, encrypted capsule, and operator orchestration are implemented and verified locally. Live canonical-pool integration is still pending, and the system is experimental and unaudited.
+Whisper's contract, headless SDK, encrypted capsule, and operator orchestration are implemented and verified locally. On Sepolia, the complete vault registration, private bid submission, note discovery, capsule matching, funding acceptance, force reveal, and proof-backed Vickrey settlement path has succeeded against the canonical pool. The system remains experimental and unaudited.
 
 ## Repository packages
 
@@ -23,6 +23,7 @@ vectors/    Cross-language transcript fixtures
 
 - token-agnostic auction configuration;
 - pool-only `ComputeAndInvoke` submit, accept, settle, and abort paths;
+- canonical callback return encoding (`Span<OpenNoteDeposit>` with no trailing values);
 - contract-scoped bidder and operator identities;
 - submitted-versus-funded bid state;
 - accepted note ID uniqueness and ordered bid-set commitment;
@@ -45,7 +46,7 @@ vectors/    Cross-language transcript fixtures
 - Whisper event scanning and durable block cursor;
 - pool receipt `EncNoteCreated` extraction;
 - vault note discovery and transaction-scoped intersection;
-- retryable discovery lag and ambiguous-note rejection;
+- retryable discovery lag and exact authenticated-amount note matching;
 - bid/capsule/note validation;
 - private bid acceptance and Vickrey settlement planning;
 - stale work-lease recovery and deadline scheduling;
@@ -58,7 +59,7 @@ vectors/    Cross-language transcript fixtures
 ```text
 Cairo contract tests   25 passing
 Headless SDK tests      9 passing
-Operator tests         11 passing
+Operator tests         17 passing
 ```
 
 Typechecking, production builds, Cairo formatting, and repository whitespace checks also pass.
@@ -78,18 +79,11 @@ pnpm add @starkware-libs/starknet-privacy-sdk@0.14.3-rc.5
 
 Do not commit `.npmrc` or send the token to another service. The repository ignores the local file.
 
-## Live configuration still required
+## Live Sepolia status
 
-The integration run needs:
+The repository records the disposable vault, relayer, corrected Whisper deployment, and successful auction-2 smoke transactions in `deployments/sepolia.json`. The public StarkWare prover and direct pool-contract discovery are sufficient for Sepolia testing; secrets and bid openings remain in owner-only files outside the repository.
 
-- a Starknet RPC endpoint;
-- canonical pool address and verified ABI;
-- hosted proving and discovery endpoints;
-- a deployed Whisper contract and deployment block;
-- a registered vault account and its secret-manager-backed viewing/signing keys;
-- a separate reveal key and relayer account;
-- a payment token supported by the pool; and
-- disposable low-value accounts for the first full lifecycle test.
+One additional operational requirement was confirmed live: a callback-only operator proof is rejected by the pool as `NO_REPLAY_PROTECTION`. Acceptance succeeded when the same batch consumed and reissued a separate vault-owned note, creating a nullifier while leaving the escrowed bid note untouched. After the force-reveal deadline, settlement consumed the accepted 0.2 STRK note and privately reissued 0.1 STRK of winner change plus 0.1 STRK of seller proceeds. Production automation needs a durable replay-note inventory and rotation policy.
 
 ## First live test
 
@@ -99,7 +93,7 @@ The smallest meaningful integration exercise is:
 2. Register the service-owned vault through the explicit registration action.
 3. Shield a small amount in a separate transaction and wait for the note to mature.
 4. Submit one exact-value private bid note and Whisper callback in the same batch.
-5. Verify event scanning, note discovery, correlation, capsule validation, and funding acceptance.
+5. Verify event scanning, note discovery, authenticated-amount correlation, capsule validation, and funding acceptance. Include a separate replay-protection note in the acceptance batch.
 6. Advance into the force-reveal window and settle.
 7. Discover the loser/winner/seller output notes and reconcile their amounts.
 
@@ -109,7 +103,7 @@ Use the official [SDK setup requirements](https://strk20-by-example.org/sdk/setu
 
 ## Before meaningful funds
 
-- complete the live canonical-pool lifecycle;
+- repeat the verified lifecycle on mainnet with disposable low-value accounts;
 - define key backup, rotation, and incident procedures;
 - add request authentication and rate limits to capsule upload;
 - add worker alerts before `abort_after`;

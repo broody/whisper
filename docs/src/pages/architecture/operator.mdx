@@ -58,21 +58,24 @@ After storing all events from a window, it advances a durable SQLite cursor. A r
 
 For each `BidSubmitted`, the chain adapter loads its source transaction receipt and collects every `EncNoteCreated` event emitted by the configured pool.
 
-Separately, the vault SDK discovers notes it can decrypt for the auction payment token. The engine intersects these sets by note ID:
+Separately, the vault SDK discovers notes it can decrypt for the auction payment token. After authenticating and decrypting the capsule, the engine intersects these sets by note ID and committed amount:
 
 ```text
 receipt note IDs
 ∩ notes decryptable by this vault
 ∩ notes for the auction token
+∩ notes matching the capsule amount
 ```
 
 The result must become exactly one before the acceptance deadline:
 
 - **zero:** discovery may be lagging, so keep the job retryable;
-- **one:** decrypt and validate the matching capsule;
+- **one:** validate and accept the matching bid note;
 - **more than one:** reject the submission as ambiguous.
 
-This makes no claim that the pool itself understands an auction. `AcceptBid` is the operator's explicit attestation that the discovered note matches the committed bid.
+Other transaction outputs, such as private change, do not make the bid ambiguous when their amounts differ. This makes no claim that the pool itself understands an auction. `AcceptBid` is the operator's explicit attestation that the discovered note matches the committed bid.
+
+`AcceptBid` must share its proof batch with a replay-protecting private state transition. The Sepolia pool rejected a callback-only proof as `NO_REPLAY_PROTECTION`; consuming and reissuing a separate vault-owned replay note supplies the nullifier while leaving the bid note available for settlement.
 
 ## Capsule validation
 

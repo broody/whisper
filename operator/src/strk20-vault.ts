@@ -5,6 +5,7 @@ import {
 } from "@whisper-trade/sdk";
 import {
   Account,
+  type BlockIdentifier,
   OutsideExecutionVersion,
   type Call,
   type OutsideExecutionOptions,
@@ -33,7 +34,7 @@ interface UpstreamBuilder {
   register(): this;
   with(token: bigint, operations: (builder: UpstreamTokenBuilder) => void): this;
   computeAndInvoke(builder: ComputeAndInvokeBuilder): this;
-  execute(): Promise<{ callAndProof: CallAndProof }>;
+  execute(options?: { provingBlockId?: BlockIdentifier }): Promise<{ callAndProof: CallAndProof }>;
 }
 
 export interface PrivateTransfersLike {
@@ -62,6 +63,7 @@ export class Strk20VaultClient implements VaultPort {
     private readonly transfers: PrivateTransfersLike,
     private readonly submitter: ProofSubmitter,
     private readonly whisperAddress: string,
+    private readonly provingBlockIdProvider?: () => Promise<BlockIdentifier>,
   ) {}
 
   async discoverNotes(paymentToken: bigint): Promise<VaultNote[]> {
@@ -77,7 +79,7 @@ export class Strk20VaultClient implements VaultPort {
   }
 
   async register(): Promise<TransactionResult> {
-    const result = await this.transfers.build().register().execute();
+    const result = await this.execute(this.transfers.build().register());
     return this.submitter.submit(result.callAndProof);
   }
 
@@ -86,17 +88,18 @@ export class Strk20VaultClient implements VaultPort {
     bidHandle: bigint,
     noteId: bigint,
   ): Promise<TransactionResult> {
-    const result = await this.transfers
-      .build()
-      .computeAndInvoke(
-        buildWhisperAcceptBidAction({
-          whisperAddress: this.whisperAddress,
-          auctionId,
-          bidHandle,
-          noteId,
-        }),
-      )
-      .execute();
+    const result = await this.execute(
+      this.transfers
+        .build()
+        .computeAndInvoke(
+          buildWhisperAcceptBidAction({
+            whisperAddress: this.whisperAddress,
+            auctionId,
+            bidHandle,
+            noteId,
+          }),
+        ),
+    );
     return this.submitter.submit(result.callAndProof);
   }
 
@@ -118,21 +121,27 @@ export class Strk20VaultClient implements VaultPort {
         }
       });
     }
-    const result = await builder
-      .computeAndInvoke(
-        buildWhisperSettlementAction({
-          whisperAddress: this.whisperAddress,
-          auctionId: plan.auction.id,
-          acceptedBidsHash: plan.auction.acceptedBidsHash,
-          revealedBids: plan.reveals,
-          winnerBidHandle: plan.winnerBidHandle,
-          revealsRoot: plan.revealsRoot,
-          outputsRoot: plan.outputsRoot,
-          settlementHash: plan.settlementHash,
-        }),
-      )
-      .execute();
+    const result = await this.execute(
+      builder
+        .computeAndInvoke(
+          buildWhisperSettlementAction({
+            whisperAddress: this.whisperAddress,
+            auctionId: plan.auction.id,
+            acceptedBidsHash: plan.auction.acceptedBidsHash,
+            revealedBids: plan.reveals,
+            winnerBidHandle: plan.winnerBidHandle,
+            revealsRoot: plan.revealsRoot,
+            outputsRoot: plan.outputsRoot,
+            settlementHash: plan.settlementHash,
+          }),
+        ),
+    );
     return this.submitter.submit(result.callAndProof);
+  }
+
+  private async execute(builder: UpstreamBuilder): Promise<{ callAndProof: CallAndProof }> {
+    if (this.provingBlockIdProvider === undefined) return builder.execute();
+    return builder.execute({ provingBlockId: await this.provingBlockIdProvider() });
   }
 }
 

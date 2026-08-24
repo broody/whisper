@@ -86,7 +86,8 @@ The contract receives an `outputs_root`, but the standard pool proof does not cu
 |---|---|
 | Discovery indexer is briefly behind | Submission retries until acceptance closes |
 | Capsule arrives late or never arrives | Bid cannot be validated or funded |
-| Transaction creates multiple candidate vault notes | Submission is rejected as ambiguous |
+| Transaction creates multiple notes with the committed bid amount | Submission is rejected as ambiguous; unrelated change is allowed |
+| Acceptance has no replay-protecting private action | Pool rejects the proof; operator must rotate a separate vault replay note |
 | Operator misses the acceptance deadline | Bid stays unfunded and should be privately returned by the operator |
 | Operator misses the settlement window | Auction can be marked aborted; funds still require operator refunds |
 | Operator loses the viewing/signing key | Vault notes may become unrecoverable |

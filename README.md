@@ -20,7 +20,7 @@ Bids contain an amount commitment, a private refund destination, and an applicat
 ## How it works
 
 1. The bidder privately transfers an encrypted note worth their bid to the auction vault and submits the bid commitments in the same STRK20 operation batch.
-2. The operator matches the incoming note with the submission, verifies the encrypted reveal capsule, and marks the bid as funded.
+2. The operator matches the incoming note with the authenticated reveal capsule and marks the bid as funded in a proof-backed batch. That batch rotates a separate vault note to provide STRK20 replay protection without spending the escrowed bid.
 3. After bidding closes, the operator opens every accepted bid and constructs a settlement batch.
 4. The contract verifies the complete bid set, commitment openings, winner, and Vickrey clearing price.
 5. The settlement returns each losing bid, returns the winner's excess, and sends the clearing price to the proceeds recipient as private notes.
@@ -62,6 +62,10 @@ Before settlement, bid amounts, bidder wallets, refund destinations, and winner 
 The vault is a privacy account controlled by the auction operator. The STRK20 pool proves note ownership, prevents double spending, and conserves value, while the Whisper contract verifies the Vickrey result. The operator is responsible for matching notes to bids and constructing the promised refund and proceeds outputs. Bidders therefore trust the operator to settle or return escrowed funds.
 
 A normal dapp must never handle a user's viewing key, notes, or proofs. User actions belong behind a compatible wallet interface; only the backend-controlled vault service holds its own viewing key. Start with the [Vocs walkthrough](docs/src/pages/how-whisper-works.mdx), then use [the protocol specification](docs/PROTOCOL.md) and the [STRK20 actions and proofs guide](https://strk20-by-example.org/actions-and-proofs) for details.
+
+## Sepolia deployment
+
+The experimental Sepolia instance is deployed at [`0x01a0…2083`](https://sepolia.voyager.online/contract/0x01a0027cf3cee829e991691543ea455d1fdcf2fc7296837243ff0cf35d742083) against the canonical Sepolia STRK20 pool. Its class hash, transactions, deployment blocks, disposable service-account addresses, and public operator keys are recorded in [`deployments/sepolia.json`](deployments/sepolia.json); signing, viewing, and reveal secrets are stored outside the repository.
 
 ## Develop
 

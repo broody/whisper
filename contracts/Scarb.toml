@@ -13,6 +13,7 @@ sierra-replace-ids = true
 starknet = "2.13.1"
 
 [[target.starknet-contract]]
+casm = true
 
 [dev-dependencies]
 cairo_test = "2.13.1"

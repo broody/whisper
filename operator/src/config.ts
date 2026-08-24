@@ -3,6 +3,7 @@ import { resolveOperatorNetworkPreset } from "./networks.ts";
 export interface OperatorRuntimeConfig {
   chainId: bigint;
   rpcUrl: string;
+  discoveryMode: "indexer" | "contract";
   discoveryUrl: string;
   provingUrl: string;
   poolAddress: bigint;
@@ -13,6 +14,7 @@ export interface OperatorRuntimeConfig {
   databasePath: string;
   allowedOrigins: string[];
   deploymentBlock: number;
+  provingBlockLag: number;
   apiHost: string;
   apiPort: number;
   pollIntervalMilliseconds: number;
@@ -25,6 +27,10 @@ export function loadOperatorRuntimeConfig(
   return {
     chainId: requiredFelt(environment, "WHISPER_CHAIN_ID", network?.chainId),
     rpcUrl: requiredUrl(environment, "WHISPER_RPC_URL", network?.rpcUrl),
+    discoveryMode: parseDiscoveryMode(
+      environment.WHISPER_DISCOVERY_MODE,
+      network?.discoveryMode ?? "indexer",
+    ),
     discoveryUrl: requiredUrl(environment, "WHISPER_DISCOVERY_URL", network?.discoveryUrl),
     provingUrl: requiredUrl(environment, "WHISPER_PROVING_URL", network?.provingUrl),
     poolAddress: requiredFelt(environment, "WHISPER_POOL_ADDRESS", network?.poolAddress),
@@ -35,12 +41,27 @@ export function loadOperatorRuntimeConfig(
     databasePath: environment.WHISPER_DATABASE_PATH ?? "./data/whisper-operator.sqlite",
     allowedOrigins: parseOrigins(environment.WHISPER_ALLOWED_ORIGINS),
     deploymentBlock: requiredInteger(environment, "WHISPER_DEPLOYMENT_BLOCK", { minimum: 0 }),
+    provingBlockLag: optionalInteger(environment.WHISPER_PROVING_BLOCK_LAG, 10, {
+      minimum: 0,
+      maximum: 10_000,
+    }),
     apiHost: environment.WHISPER_API_HOST ?? "127.0.0.1",
     apiPort: optionalInteger(environment.WHISPER_API_PORT, 8081, { minimum: 1, maximum: 65_535 }),
     pollIntervalMilliseconds: optionalInteger(environment.WHISPER_POLL_INTERVAL_MS, 10_000, {
       minimum: 250,
     }),
   };
+}
+
+function parseDiscoveryMode(
+  value: string | undefined,
+  fallback: "indexer" | "contract",
+): "indexer" | "contract" {
+  const mode = value ?? fallback;
+  if (mode !== "indexer" && mode !== "contract") {
+    throw new Error("WHISPER_DISCOVERY_MODE must be indexer or contract");
+  }
+  return mode;
 }
 
 function requiredFelt(

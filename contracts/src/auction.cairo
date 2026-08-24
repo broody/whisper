@@ -245,7 +245,7 @@ pub mod WhisperAuction {
 
         fn privacy_invoke_with_computation(
             ref self: ContractState, command: PrivacyCommand,
-        ) -> (Span<OpenNoteDeposit>, Span<ContractAddress>) {
+        ) -> Span<OpenNoteDeposit> {
             self.assert_pool();
             match command {
                 PrivacyCommand::SubmitBid(bid) => self.record_bid_submission(bid),
@@ -254,8 +254,7 @@ pub mod WhisperAuction {
                 PrivacyCommand::Abort(input) => self.abort_auction(input),
             }
             let deposits: Array<OpenNoteDeposit> = array![];
-            let associated_addresses: Array<ContractAddress> = array![];
-            (deposits.span(), associated_addresses.span())
+            deposits.span()
         }
     }
 

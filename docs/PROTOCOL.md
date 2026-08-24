@@ -1,6 +1,6 @@
 # Whisper Private Vickrey Auction Protocol
 
-**Status:** Canonical-pool contract, SDK capsule plumbing, and operator chain/worker adapters implemented; live service verification pending; custodial and unaudited
+**Status:** Sepolia registration, private bid, discovery, and funding acceptance verified; settlement pending; custodial and unaudited
 **Updated:** 2026-08-23
 
 ## Decision
@@ -24,6 +24,8 @@ The existing pool already supports the pieces Whisper needs:
 - `ComputeAndInvoke`, which derives a contract-scoped private identity and invokes Whisper through fixed selectors.
 
 Whisper therefore does not deploy a separate pool and does not add an auction action to the pool's prover. The auction callback is one action inside the same batch as the relevant private transfers. See [STRK20 actions and proofs](https://strk20-by-example.org/actions-and-proofs) and [multi-operation batches](https://strk20-by-example.org/sdk/multi-op-batch).
+
+The callback ABI must match the canonical pool exactly. `privacy_invoke_with_computation` returns one serialized `Span<OpenNoteDeposit>` and no trailing metadata. Whisper currently returns an empty span because its callbacks update auction state but do not settle open notes directly. The pool rejects additional return values as `INVALID_INVOKE_RETURN_DATA`.
 
 The pool does **not** know Vickrey rules, associate an incoming note with a Whisper bid, restrict the operator's viewing key, or validate Whisper's `outputs_root`.
 
@@ -107,11 +109,13 @@ The amount and salt remain absent from public bid calldata until force reveal. S
 3. It uploads the encrypted reveal capsule to the operator service and, in the same private-operation batch as the transfer, submits `PrivacyRequest::SubmitBid` through `ComputeAndInvoke` with `auction_id`, `reveal_commitment`, `refund_commitment`, and `winner_commitment`.
 4. Whisper derives the bidder pseudonym, rejects a duplicate identity for that auction, records the submission as `funded = false`, and emits `BidSubmitted`.
 5. The operator correlates the encrypted note created for the vault in that same pool transaction with `BidSubmitted`, decrypts the matching capsule, and checks auction, token, amount, commitment opening, and refund/winner routing commitments.
-6. During the acceptance grace period, before `force_reveal_after`, the operator submits `PrivacyRequest::AcceptBid` with the discovered `note_id`. Whisper authenticates its committed private identity, rejects reuse of that note, marks the bid funded, appends it to the ordered accepted set, and emits `BidFunded`.
+6. During the acceptance grace period, before `force_reveal_after`, the operator submits `PrivacyRequest::AcceptBid` with the discovered `note_id`. The same batch must also consume and reissue a separate vault-owned replay-protection note: the canonical pool rejects a callback-only proof with `NO_REPLAY_PROTECTION`. Whisper authenticates the committed private identity, rejects reuse of the bid note ID, marks the bid funded, appends it to the ordered accepted set, and emits `BidFunded`.
 
 Only funded bids participate in settlement. `force_reveal_after` must be later than `bidding_deadline` so notes submitted near the deadline can be indexed and accepted. If a note is invalid, late, unmatched, or exceeds `max_bids`, the operator should privately return it immediately; the contract cannot force that refund.
 
-The submit and transfer must be one batch so the operator can correlate their events without asking the bidder or upstream SDK for the new encrypted-note ID. This transaction-level correlation does not create an auction-specific proof binding; the operator's acceptance is the binding attestation. The operator should reject a submission transaction containing zero or multiple candidate outputs for the same vault and auction token.
+The submit and transfer must be one batch so the operator can correlate their events without asking the bidder or upstream SDK for the new encrypted-note ID. This transaction-level correlation does not create an auction-specific proof binding; the operator's acceptance is the binding attestation. The operator decrypts the authenticated capsule first and requires exactly one transaction-scoped vault note whose token and amount match it. Other vault-owned outputs, such as private change, are permitted.
+
+The replay-protection note is operational state, not auction escrow. It must never be an accepted bid note. After every acceptance, its replacement note ID must be recorded and allowed to mature before reuse; multiple concurrent acceptances require a pool of independent replay notes or batched acceptance support.
 
 ## Force reveal and Vickrey settlement
 
@@ -217,7 +221,7 @@ Implemented in the operator and SDK application layer:
 
 - authenticated encrypted reveal capsules and domain-separated routing commitments;
 - SQLite-backed capsule and idempotency state without key persistence;
-- exact note/commitment/amount validation with ambiguous-note rejection;
+- exact note/commitment/amount validation while permitting unrelated private change;
 - private refund, winner-change, and proceeds settlement planning;
 - structural official-SDK and relayed outside-execution adapters; and
 - public configuration and idempotent capsule upload HTTP endpoints;
@@ -225,12 +229,13 @@ Implemented in the operator and SDK application layer:
 - canonical-pool `EncNoteCreated` receipt extraction and vault-note intersection; and
 - stale worker lease recovery and deadline settlement scheduling.
 
-Still required for a live auction:
+Still required before a production auction:
 
 - backend vault account lifecycle and production secret-manager bindings;
 - key rotation and independent review of the capsule format;
 - authenticated installation of the official SDK package;
-- live verification of the deployed pool ABI, discovery, proving, and relay services;
+- durable replay-protection note inventory and rotation for operator callbacks;
+- completion of the force-reveal settlement smoke test;
 - durable event polling, scheduling, worker leases, alerting, and recovery automation;
 - mainnet configuration and deployment verification;
 - independent Cairo and operational security review.

@@ -27,7 +27,9 @@ pub trait IWhisperPrivacyAction<TContractState> {
     /// Called onchain by the configured STRK20 pool with the computation result.
     /// Bid registration creates no open-note deposits, so both returned spans
     /// are empty.
+    /// The canonical pool decodes exactly one serialized `Span<OpenNoteDeposit>`.
+    /// Returning any trailing value makes the pool reject the callback.
     fn privacy_invoke_with_computation(
         ref self: TContractState, command: PrivacyCommand,
-    ) -> (Span<OpenNoteDeposit>, Span<ContractAddress>);
+    ) -> Span<OpenNoteDeposit>;
 }

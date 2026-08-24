@@ -1,6 +1,7 @@
 export interface OperatorNetworkPreset {
   chainId: bigint;
   rpcUrl: string;
+  discoveryMode: "indexer" | "contract";
   discoveryUrl: string;
   provingUrl: string;
   poolAddress: bigint;
@@ -14,6 +15,7 @@ export interface OperatorNetworkPreset {
 export const SEPOLIA_OPERATOR_NETWORK = Object.freeze({
   chainId: 0x534e5f5345504f4c4941n,
   rpcUrl: "https://starknet-sepolia-rpc.publicnode.com",
+  discoveryMode: "contract",
   discoveryUrl: "https://discovery-service.alpha-sepolia.sw-dev.io",
   provingUrl: "https://transaction-prover.alpha-sepolia.sw-dev.io",
   poolAddress: 0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91n,

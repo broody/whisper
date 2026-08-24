@@ -68,11 +68,14 @@ export async function createOperatorService(
       viewingKeyProvider: dependencies.viewingKeyProvider,
       provingUrl: config.provingUrl,
       discoveryUrl: config.discoveryUrl,
+      discoveryMode: config.discoveryMode,
       rpcUrl: config.rpcUrl,
       chainId: `0x${config.chainId.toString(16)}` as constants.StarknetChainId,
       poolAddress: config.poolAddress,
       whisperAddress: config.whisperAddress,
       submitter,
+      provingBlockIdProvider: async () =>
+        Math.max((await dependencies.provider.getBlockNumber()) - config.provingBlockLag, 0),
       ...(dependencies.sdkModule === undefined ? {} : { sdkModule: dependencies.sdkModule }),
     });
     const capsules = new WhisperSdkCapsuleCipher(

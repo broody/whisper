@@ -1,0 +1,58 @@
+{
+  "network": "sepolia",
+  "chainId": "0x534e5f5345504f4c4941",
+  "compiler": {
+    "scarb": "2.13.1",
+    "cairo": "2.13.1",
+    "sierra": "1.7.0"
+  },
+  "privacyPoolAddress": "0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91",
+  "classHash": "0x046ade7bc817c61f5490e67cfef3135af9b7932e7693e3068d7a6ee954206e76",
+  "declarationTransactionHash": "0x02a9ec5f9b26a2183662f037ff8358d8f2922a9c1ea46f2991e411b5bad13d20",
+  "declarationBlock": 13953876,
+  "contractAddress": "0x01a0027cf3cee829e991691543ea455d1fdcf2fc7296837243ff0cf35d742083",
+  "deploymentTransactionHash": "0x027358925ff2099b783cc8c5b4059f991817b58ba051dd4d1261462b28a50fa4",
+  "deploymentBlock": 13953894,
+  "strkTokenAddress": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+  "poolFeeAmount": "2000000000000000000",
+  "feeApprovalTransactionHash": "0x02e3e2bf7be05e3bfa84e43d4f80250e663f1c9db6a1dd4ae67351c30e83407c",
+  "vaultRegistrationTransactionHash": "0x06d3ac8a63d268ce44f1af5723c2a8c266ab8bbed5bb2377bc014c1336f84bd8",
+  "vaultRegistrationBlock": 13953284,
+  "vault": {
+    "address": "0x057dc94af98dedd8707ec3b5f27bfe7c65d341ebc7bda7ff200e49bf5d259767",
+    "accountDeploymentTransactionHash": "0x0081e17121fd7bc46ba6755597b19cb78fda0d5acdf5c0ae64a212a4d0fcd57f",
+    "viewingPublicKey": "0x2c8ce9ebb3c7a4f61fa71413279da5b899982081db9619b23aabe90b4d7dee9"
+  },
+  "relayer": {
+    "address": "0x057c38fca52f4e72c955b5a0f079d4a64a82206b55e6246ecbf75a0679241658",
+    "accountDeploymentTransactionHash": "0x013e8180a3508af0e302a4b24de9971e7dcd64835152a97531a9b65483282124"
+  },
+  "capsuleRevealPublicKey": "0x2401c56836a61ca8a81807195dbae679c9f9232f80f10d7e2092a330c7f553e",
+  "smokeTest": {
+    "auctionId": "2",
+    "auctionCreationTransactionHash": "0x05dc2b8f2691b3af280b538ddd4b873a60ab2faccb92ff3afb741b9860f6f2be",
+    "auctionCreationBlock": 13954248,
+    "privateBidTransactionHash": "0x049167f29849b829e5ba2ae2a45ecc51e2699fde1771dc97b5eca1374dfada97",
+    "privateBidBlock": 13954330,
+    "bidHandle": "0x098baf598badfa667498ef0346e45d6da2fd9d615c5d7c33152e04b5c472627",
+    "fundedNoteId": "0x0471e7446de0b3d89f1e6490b7fc988a7b7166a3bb9d1f93ce2321988a51966",
+    "acceptanceTransactionHash": "0x011b5ef00c55485e4c9b5b90b1919be9e6543ef09b265ecd2da4f84e7c671d93",
+    "acceptanceBlock": 13954578,
+    "acceptanceReplayProtection": "consume-and-reissue vault baton note",
+    "settlementFeeApprovalTransactionHash": "0x073f016dd2058d0c14e69ba15cc7b0409f61367a68da44fa472e005ee17c660",
+    "settlementFeeApprovalBlock": 13954718,
+    "settlementTransactionHash": "0x06a9d2e3088524faac5b295353a8916e4f7d93dacbbd5e8aa2d2c2ab55cbf963",
+    "settlementBlock": 13958352,
+    "settlementStatus": "settled",
+    "winningBid": "200000000000000000",
+    "secondHighestBid": "0",
+    "clearingPrice": "100000000000000000"
+  },
+  "supersededDeployment": {
+    "reason": "callback returned trailing data rejected by the canonical pool",
+    "classHash": "0x03ef78fe82df6b15a1da841f4de4a9c6ae36475d8483dfa6b5e9198706b02083",
+    "contractAddress": "0x07b94e2fa8969d916ad52857e9645d7a0f1c32748e6b7e1db258eea0709b138d",
+    "declarationTransactionHash": "0x026f95a491d2cf4cca6e54229edbb94118a197f7b661bb9bc9d728c5bccc17bc",
+    "deploymentTransactionHash": "0x0158b1d4035f15e7cd5816ff5ee09986017dd903df357968b6a8ffbd78f2e11b"
+  }
+}
