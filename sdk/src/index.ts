@@ -1,10 +1,17 @@
 export {
-  buildWhisperBidAction,
+  buildWhisperBidActions,
+  buildWhisperBidTopUpActions,
   encodeWhisperBidIntent,
+  encodeWhisperBidTopUpIntent,
   type ComputeAndInvokeBuilder,
   type ComputeAndInvokeDetails,
   type FeltLike,
+  type Strk20InvokeAction,
+  type Strk20TransferAction,
+  type WhisperBidComposition,
   type WhisperBidIntent,
+  type WhisperBidTopUpIntent,
+  type WhisperWalletBidActions,
 } from "./bid-action.js";
 export {
   buildWhisperAbortAction,
@@ -16,8 +23,8 @@ export {
   type WhisperSettlement,
 } from "./operator-actions.js";
 export {
+  computeBidGroupHandle,
   computeBidHandle,
-  computeIdentityCommitment,
   computeOperatorIdentityCommitment,
   computeProceedsRecipientCommitment,
   computeRefundCommitment,

@@ -20,8 +20,8 @@ flowchart LR
   whisper["Whisper Cairo contract"]
   operator["Operator privacy vault"]
 
-  bidder -->|"encrypted bid note"| pool
-  pool -->|"private callback + commitments"| whisper
+  bidder -->|"wallet transfer + invoke"| pool
+  pool -->|"encrypted note + commitments"| whisper
   pool -->|"note discoverable with vault key"| operator
   operator -->|"accept + settle through pool"| pool
 ```
@@ -30,17 +30,18 @@ flowchart LR
 - **Whisper provides auction rules:** bid commitments, acceptance deadlines, deterministic Vickrey pricing, and settlement verification.
 - **The operator provides custody and availability:** it discovers incoming notes, decrypts bid capsules, and creates private refunds and proceeds.
 
-Whisper does not deploy a second privacy pool and does not require an auction-specific prover circuit. It composes the existing pool's normal note operations with one `ComputeAndInvoke` callback into the Whisper contract.
+Whisper does not deploy a second privacy pool and does not require an auction-specific prover circuit. Bidder dapps send the standard Wallet API `transfer` + `invoke` actions, so the connected wallet owns proving. The operator still uses `ComputeAndInvoke` for authenticated vault acceptance and settlement.
 
 ## One auction in 60 seconds
 
 1. The bidder starts with funds already shielded in the STRK20 pool.
-2. The bidder privately creates an exact-value note for the operator vault and commits to the bid details.
+2. The dapp gives a compatible wallet an exact-value private transfer plus a Whisper invoke containing commitments.
 3. The pool proves the private transfer and invokes Whisper in the same transaction.
 4. The operator discovers the new vault note, decrypts the matching bid capsule, validates it, and marks the bid funded.
-5. After the deadline, the operator opens all accepted bids and computes the Vickrey result.
-6. One private settlement spends the escrow notes, refunds losers, returns the winner's change, and pays the seller.
-7. Whisper verifies the accepted bid set, every opening, the winner, and the clearing price.
+5. The bidder may add another note tranche to increase the same logical bid.
+6. After the deadline, the operator opens all accepted tranches, sums each group, and computes the Vickrey result.
+7. One private settlement spends the escrow notes, refunds losing groups, returns the winner's change, and pays the seller.
+8. Whisper verifies the accepted tranche set, every opening, the group totals, winner, and clearing price.
 
 [Read the full walkthrough →](/how-whisper-works)
 
@@ -49,10 +50,10 @@ Whisper does not deploy a second privacy pool and does not require an auction-sp
 | Hidden before settlement | Public before settlement |
 |---|---|
 | Bid amount and salt | Auction configuration and payment token |
-| Bidder wallet behind the private identity | Bid handle and commitments |
-| Refund destination and winner payload | Note ID, timing, submission count, funded count |
+| Bidder wallet and bid nonce | Group/tranche handles and commitments |
+| Refund destination and winner payload | Note ID, timing, submission count, funded-tranche count |
 
-Settlement reveals the accepted bid amounts, winner, and clearing price. The public chain still does not learn which wallets own the bid notes or private settlement outputs.
+Settlement reveals the accepted tranche amounts, aggregate winner, and clearing price. The public chain still does not learn which wallets own the bid notes or private settlement outputs.
 
 The 1-of-1 operator is different: it can decrypt bid amounts as notes arrive, controls the escrowed notes, and is trusted to create the promised outputs. [Read the exact privacy and custody boundary →](/security/privacy-and-trust)
 

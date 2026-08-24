@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildWhisperBidAction, encodeWhisperBidIntent } from "./bid-action.ts";
+import {
+  buildWhisperBidActions,
+  buildWhisperBidTopUpActions,
+  encodeWhisperBidIntent,
+} from "./bid-action.ts";
 import {
   computeProceedsRecipientCommitment,
   computeRefundCommitment,
+  computeBidGroupHandle,
   computeBidHandle,
-  computeIdentityCommitment,
   computeOperatorIdentityCommitment,
   computeRevealCommitment,
 } from "./hashes.ts";
@@ -23,23 +27,56 @@ import {
 
 const intent = {
   whisperAddress: "0x123",
+  paymentToken: "0x456",
+  vaultAddress: "0x789",
   auctionId: 7n,
+  bidNonce: 11n,
+  bidAmount: 100n,
   revealCommitment: 12n,
   refundCommitment: 13n,
   winnerCommitment: 14n,
 };
 
 test("encodes the SubmitBid request in Cairo enum and field order", () => {
-  assert.deepEqual(encodeWhisperBidIntent(intent), [0n, 7n, 12n, 13n, 14n]);
+  assert.deepEqual(encodeWhisperBidIntent(intent), [0n, 7n, 11n, 12n, 13n, 14n]);
 });
 
-test("builds a ComputeAndInvoke callback without identity-key material", () => {
-  const details = buildWhisperBidAction(intent)({});
+test("builds an atomic Wallet API transfer and standard invoke", () => {
+  const composition = buildWhisperBidActions(intent);
+  assert.deepEqual(composition.actions, [
+    { type: "transfer", token: "0x456", amount: "0x64", recipient: "0x789" },
+    {
+      type: "invoke",
+      contract: "0x123",
+      calldata: ["0x0", "0x7", "0xb", "0xc", "0xd", "0xe"],
+    },
+  ]);
+  assert.equal(
+    composition.groupHandle,
+    computeBidGroupHandle(7n, 11n, 13n, 14n),
+  );
+  assert.equal(
+    composition.bidHandle,
+    computeBidHandle(7n, composition.groupHandle, 0n, 12n),
+  );
+});
 
-  assert.equal(details.contractAddress, "0x123");
-  assert.deepEqual(details.computeAdditionalData, [0n, 7n, 12n, 13n, 14n]);
-  assert.deepEqual(details.invokeAdditionalData, []);
-  assert.equal(Object.hasOwn(details, "identityKey"), false);
+test("builds an additive bid tranche through the same wallet flow", () => {
+  assert.deepEqual(
+    buildWhisperBidTopUpActions({
+      whisperAddress: "0x123",
+      paymentToken: "0x456",
+      vaultAddress: "0x789",
+      auctionId: 7n,
+      groupHandle: 15n,
+      bidAmount: 30n,
+      revealCommitment: 16n,
+    }),
+    [
+      { type: "transfer", token: "0x456", amount: "0x1e", recipient: "0x789" },
+      { type: "invoke", contract: "0x123", calldata: ["0x1", "0x7", "0xf", "0x10"] },
+    ],
+  );
 });
 
 test("rejects zero commitments and out-of-range auction ids", () => {
@@ -58,22 +95,16 @@ test("rejects zero commitments and out-of-range auction ids", () => {
 });
 
 test("matches the canonical Cairo bid transcript vector", () => {
-  const identityCommitment = computeIdentityCommitment(0xabcn, 1n);
-  const bidHandle = computeBidHandle(
-    1n,
-    identityCommitment,
-    0x701n,
-    0x702n,
-    0x703n,
-  );
+  const groupHandle = computeBidGroupHandle(1n, 0xabcn, 0x702n, 0x703n);
+  const bidHandle = computeBidHandle(1n, groupHandle, 0n, 0x701n);
 
   assert.equal(
-    identityCommitment,
-    0x388934032e394e858e5fd474159ead3a6dd48d0419c2a4b9ffa38c353b72ef1n,
+    groupHandle,
+    0xe8fdc2a31cc7c303e4a77bd5656145cd299cfeef0dbb110ef69b2f4daf123fn,
   );
   assert.equal(
     bidHandle,
-    0x11c9d1b216ef5e67b87296fe6d25da64c546d2d1a95af2de7a56e37a7abaf5bn,
+    0x56fe80448dce869e7b460dd35c343d5018dd0b0a085bc5ff8aaa2bc6abd64fn,
   );
 });
 
@@ -97,7 +128,7 @@ test("encodes operator request variants", () => {
       noteId: 11n,
     })({})
       .computeAdditionalData,
-    [1n, 7n, 8n, 11n],
+    [0n, 7n, 8n, 11n],
   );
 
   assert.deepEqual(
@@ -114,17 +145,17 @@ test("encodes operator request variants", () => {
       outputsRoot: 22n,
       settlementHash: 23n,
     })({}).computeAdditionalData,
-    [2n, 7n, 20n, 2n, 8n, 100n, 30n, 9n, 70n, 31n, 8n, 21n, 22n, 23n],
+    [1n, 7n, 20n, 2n, 8n, 100n, 30n, 9n, 70n, 31n, 8n, 21n, 22n, 23n],
   );
 
   assert.deepEqual(
     buildWhisperAbortAction({ whisperAddress: "0x123", auctionId: 7n, recoveryHash: 44n })({})
       .computeAdditionalData,
-    [3n, 7n, 44n],
+    [2n, 7n, 44n],
   );
 });
 
-test("rejects inconsistent settlement winners", () => {
+test("supports no-sale settlement while rejecting a winner for an empty set", () => {
   const base = {
     whisperAddress: "0x123",
     auctionId: 7n,
@@ -142,14 +173,13 @@ test("rejects inconsistent settlement winners", () => {
       }),
     /winnerBidHandle must be zero/,
   );
-  assert.throws(
-    () =>
-      buildWhisperSettlementAction({
-        ...base,
-        revealedBids: [{ bidHandle: 8n, amount: 100n, salt: 30n }],
-        winnerBidHandle: 0n,
-      }),
-    /winnerBidHandle must be non-zero/,
+  assert.deepEqual(
+    buildWhisperSettlementAction({
+      ...base,
+      revealedBids: [{ bidHandle: 8n, amount: 20n, salt: 30n }],
+      winnerBidHandle: 0n,
+    })({}).computeAdditionalData,
+    [1n, 7n, 20n, 1n, 8n, 20n, 30n, 0n, 21n, 22n, 23n],
   );
 });
 

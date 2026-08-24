@@ -108,7 +108,7 @@ export class WhisperOperator {
         );
       }
       const note = matchingNotes[0]!;
-      validateOpening(auction.reservePrice, bid, note, opening);
+      validateOpening(bid, note, opening);
 
       const claimed = await store.claimSubmission(auctionId, bidHandle);
       if (!claimed) return (await store.getSubmission(auctionId, bidHandle))!;
@@ -143,7 +143,9 @@ export class WhisperOperator {
 
     try {
       const bids = await chain.getAcceptedBids(auctionId);
-      if (bids.length !== auction.bidCount) throw new RetryableOperatorError("accepted bid set is incomplete");
+      if (bids.length !== auction.bidCount) {
+        throw new RetryableOperatorError("accepted tranche set is incomplete");
+      }
       const notes = await vault.discoverNotes(auction.paymentToken);
       const noteById = new Map(notes.map((note) => [note.id.toString(), note]));
       const openings: WhisperBidOpening[] = [];
@@ -163,17 +165,18 @@ export class WhisperOperator {
           auctionId,
           revealCommitment: bid.revealCommitment,
         });
-        validateOpening(auction.reservePrice, bid, note, opening);
+        validateOpening(bid, note, opening);
         openings.push(opening);
         consumedNotes.push(note);
       }
 
       const reveals: SettlementReveal[] = bids.map((bid, index) => ({
         bidHandle: bid.bidHandle,
+        groupHandle: bid.groupHandle,
         amount: BigInt(openings[index]!.amount),
         salt: BigInt(openings[index]!.salt),
       }));
-      const price = computeVickreyPrice(reveals, auction.reservePrice);
+      const price = computeVickreyPrice(aggregateReveals(reveals), auction.reservePrice);
       const proceedsRecipient = await this.dependencies.proceedsRecipients.getProceedsRecipient(
         auctionId,
       );
@@ -211,7 +214,6 @@ export class WhisperOperator {
 }
 
 function validateOpening(
-  reservePrice: bigint,
   bid: BidView,
   note: VaultNote,
   openingInput: WhisperBidOpening,
@@ -242,7 +244,6 @@ function validateOpening(
     throw new RejectedBidError("capsule reveal commitment mismatch");
   }
   if (note.amount !== opening.amount) throw new RejectedBidError("vault note amount mismatch");
-  if (opening.amount < reservePrice) throw new RejectedBidError("bid is below reserve");
 }
 
 function buildOutputs(
@@ -252,19 +253,42 @@ function buildOutputs(
   clearingPrice: bigint,
   proceedsRecipient: bigint,
 ): SettlementOutput[] {
-  const outputs: SettlementOutput[] = [];
+  const groups = new Map<string, { groupHandle: bigint; recipient: bigint; amount: bigint }>();
   bids.forEach((bid, index) => {
     const amount = BigInt(openings[index]!.amount);
     const recipient = BigInt(openings[index]!.refundRecipient);
-    if (bid.bidHandle === winnerBidHandle) {
-      const change = amount - clearingPrice;
+    const key = bid.groupHandle.toString();
+    const current = groups.get(key);
+    if (current !== undefined && current.recipient !== recipient) {
+      throw new Error("bid group has inconsistent refund recipients");
+    }
+    groups.set(key, {
+      groupHandle: bid.groupHandle,
+      recipient,
+      amount: (current?.amount ?? 0n) + amount,
+    });
+  });
+  const outputs: SettlementOutput[] = [];
+  for (const group of groups.values()) {
+    if (group.groupHandle === winnerBidHandle) {
+      const change = group.amount - clearingPrice;
       if (change > 0n) {
-        outputs.push({ kind: "winner-change", recipient, amount: change, bidHandle: bid.bidHandle });
+        outputs.push({
+          kind: "winner-change",
+          recipient: group.recipient,
+          amount: change,
+          bidHandle: group.groupHandle,
+        });
       }
     } else {
-      outputs.push({ kind: "refund", recipient, amount, bidHandle: bid.bidHandle });
+      outputs.push({
+        kind: "refund",
+        recipient: group.recipient,
+        amount: group.amount,
+        bidHandle: group.groupHandle,
+      });
     }
-  });
+  }
   if (clearingPrice > 0n) {
     outputs.push({
       kind: "proceeds",
@@ -274,6 +298,21 @@ function buildOutputs(
     });
   }
   return outputs;
+}
+
+function aggregateReveals(reveals: readonly SettlementReveal[]): SettlementReveal[] {
+  const groups = new Map<string, SettlementReveal>();
+  for (const reveal of reveals) {
+    const key = reveal.groupHandle.toString();
+    const current = groups.get(key);
+    groups.set(key, {
+      bidHandle: reveal.groupHandle,
+      groupHandle: reveal.groupHandle,
+      amount: (current?.amount ?? 0n) + reveal.amount,
+      salt: 0n,
+    });
+  }
+  return [...groups.values()];
 }
 
 function unique(values: readonly bigint[]): Set<string> {

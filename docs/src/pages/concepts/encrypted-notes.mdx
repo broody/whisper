@@ -95,7 +95,7 @@ Spending does not erase the immutable note. Instead, the spender publishes a one
 
 ## Note IDs can be public without revealing note contents
 
-The pool's `EncNoteCreated` event exposes a note ID. Whisper intentionally records the accepted note ID too, because it needs a durable handle connecting the funded bid to the vault's later settlement input.
+The pool's `EncNoteCreated` event exposes a note ID. Whisper intentionally records each accepted note ID too, because it needs a durable handle connecting the funded tranche to the vault's later settlement input.
 
 Knowing the ID does not by itself reveal the owner, token, amount, channel key, or eventual nullifier. Privacy still has side channels: unique amounts, closely timed public shielding, or outside knowledge can make a payment easier to correlate.
 

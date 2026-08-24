@@ -112,6 +112,8 @@ interface BidFixture {
 async function bidFixture(input: {
   auctionId: bigint;
   bidHandle: bigint;
+  groupHandle?: bigint;
+  trancheIndex?: number;
   amount: bigint;
   noteId: bigint;
   refundRecipient: bigint;
@@ -145,6 +147,8 @@ async function bidFixture(input: {
     bid: {
       auctionId: input.auctionId,
       bidHandle: input.bidHandle,
+      groupHandle: input.groupHandle ?? input.bidHandle,
+      trancheIndex: input.trancheIndex ?? 0,
       noteId: 0n,
       revealCommitment,
       refundCommitment,
@@ -377,6 +381,98 @@ test("constructs a complete Vickrey settlement with private refunds and change",
   assert.equal((await context.store.getSettlement(7n))?.status, "settled");
 });
 
+test("aggregates additive bid tranches before Vickrey pricing", async () => {
+  const context = setup();
+  const fixtures = await Promise.all([
+    bidFixture({
+      auctionId: 7n,
+      bidHandle: 10n,
+      groupHandle: 100n,
+      trancheIndex: 0,
+      amount: 50n,
+      noteId: 101n,
+      refundRecipient: 0xa01n,
+    }),
+    bidFixture({
+      auctionId: 7n,
+      bidHandle: 11n,
+      groupHandle: 100n,
+      trancheIndex: 1,
+      amount: 30n,
+      noteId: 102n,
+      refundRecipient: 0xa01n,
+    }),
+    bidFixture({
+      auctionId: 7n,
+      bidHandle: 20n,
+      groupHandle: 200n,
+      trancheIndex: 0,
+      amount: 60n,
+      noteId: 103n,
+      refundRecipient: 0xa02n,
+    }),
+  ]);
+  context.chain.auction.bidCount = fixtures.length;
+  for (const fixture of fixtures) {
+    context.chain.bids.set(`7:${fixture.bid.bidHandle}`, fixture.bid);
+    context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+    context.vault.notes.push(fixture.note);
+    await context.store.putCapsule(fixture.envelope);
+    assert.equal((await context.operator.ingestSubmission(fixture.event)).status, "funded");
+  }
+
+  context.setNowSeconds(200);
+  const plan = await context.operator.settleAuction(7n);
+
+  assert.ok(plan);
+  assert.equal(plan.winnerBidHandle, 100n);
+  assert.equal(plan.winningBid, 80n);
+  assert.equal(plan.secondHighestBid, 60n);
+  assert.equal(plan.clearingPrice, 60n);
+  assert.deepEqual(
+    plan.outputs.map(({ kind, recipient, amount }) => ({ kind, recipient, amount })),
+    [
+      { kind: "winner-change", recipient: 0xa01n, amount: 20n },
+      { kind: "refund", recipient: 0xa02n, amount: 60n },
+      { kind: "proceeds", recipient: 0x999n, amount: 60n },
+    ],
+  );
+  assert.equal(
+    plan.outputs.reduce((sum, output) => sum + output.amount, 0n),
+    plan.notes.reduce((sum, note) => sum + note.amount, 0n),
+  );
+});
+
+test("refunds a funded group that finishes below reserve", async () => {
+  const context = setup();
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    groupHandle: 100n,
+    amount: 20n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.auction.bidCount = 1;
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+  context.vault.notes.push(fixture.note);
+  await context.store.putCapsule(fixture.envelope);
+  assert.equal((await context.operator.ingestSubmission(fixture.event)).status, "funded");
+
+  context.setNowSeconds(200);
+  const plan = await context.operator.settleAuction(7n);
+
+  assert.ok(plan);
+  assert.equal(plan.winnerBidHandle, 0n);
+  assert.equal(plan.winningBid, 0n);
+  assert.equal(plan.clearingPrice, 0n);
+  assert.deepEqual(
+    plan.outputs.map(({ kind, recipient, amount }) => ({ kind, recipient, amount })),
+    [{ kind: "refund", recipient: 0xa01n, amount: 20n }],
+  );
+});
+
 test("persists encrypted capsules and idempotency state in SQLite", async () => {
   const store = new SqliteOperatorStore(":memory:");
   const fixture = await bidFixture({
@@ -462,7 +558,7 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
     0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 2n, 2n, 1n, 0n, 0n,
   ].map(hex);
   const bid = (handle: bigint, noteId: bigint) =>
-    [7n, handle, handle + 1n, noteId, handle + 2n, handle + 3n, handle + 4n, 80n, 1n, 0n]
+    [7n, handle, handle + 100n, 0n, noteId, handle + 2n, handle + 3n, handle + 4n, 80n, 1n, 0n]
       .map(hex);
   const provider = {
     async callContract(call: { entrypoint: string; calldata?: readonly string[] }) {
@@ -527,6 +623,7 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   assert.equal(auction.status, "bidding");
   assert.equal(auction.bidCount, 2);
   assert.deepEqual(bids.map((value) => value.bidHandle), [10n, 20n]);
+  assert.deepEqual(bids.map((value) => value.groupHandle), [110n, 120n]);
   assert.deepEqual(events.auctions.map((value) => value.auctionId), [7n]);
   assert.deepEqual(events.submissions.map((value) => value.bidHandle), [10n]);
   assert.deepEqual(candidates, [101n, 102n]);

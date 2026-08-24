@@ -1,18 +1,22 @@
 use core::hash::HashStateTrait;
 use core::poseidon::PoseidonTrait;
 
-pub const IDENTITY_DOMAIN: felt252 = 'WHISPER_ID_V1';
-pub const BID_DOMAIN: felt252 = 'WHISPER_BID_V1';
+pub const BID_GROUP_DOMAIN: felt252 = 'WHISPER_GROUP_V1';
+pub const BID_DOMAIN: felt252 = 'WHISPER_TRANCHE_V1';
 pub const OPERATOR_DOMAIN: felt252 = 'WHISPER_OP_V1';
 pub const REVEAL_DOMAIN: felt252 = 'WHISPER_REVEAL_V1';
 
-/// Derives an auction-scoped pseudonymous bidder identity from the identity key
-/// supplied by STRK20's proven `ComputeAndInvoke` action.
-pub fn compute_identity_commitment(identity_key: felt252, auction_id: u64) -> felt252 {
+/// Derives an unlinkable logical bid group from client-generated randomness and
+/// the group's fixed private-output routing commitments.
+pub fn compute_bid_group_handle(
+    auction_id: u64, bid_nonce: felt252, refund_commitment: felt252, winner_commitment: felt252,
+) -> felt252 {
     PoseidonTrait::new()
-        .update(IDENTITY_DOMAIN)
-        .update(identity_key)
+        .update(BID_GROUP_DOMAIN)
         .update(auction_id.into())
+        .update(bid_nonce)
+        .update(refund_commitment)
+        .update(winner_commitment)
         .finalize()
 }
 
@@ -45,18 +49,13 @@ pub fn compute_reveal_commitment(
 
 /// Commits every public bid transcript field into one deterministic handle.
 pub fn compute_bid_handle(
-    auction_id: u64,
-    identity_commitment: felt252,
-    reveal_commitment: felt252,
-    refund_commitment: felt252,
-    winner_commitment: felt252,
+    auction_id: u64, group_handle: felt252, tranche_index: u32, reveal_commitment: felt252,
 ) -> felt252 {
     PoseidonTrait::new()
         .update(BID_DOMAIN)
         .update(auction_id.into())
-        .update(identity_commitment)
+        .update(group_handle)
+        .update(tranche_index.into())
         .update(reveal_commitment)
-        .update(refund_commitment)
-        .update(winner_commitment)
         .finalize()
 }

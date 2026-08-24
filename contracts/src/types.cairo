@@ -59,29 +59,56 @@ pub struct Auction {
 pub struct BidSubmission {
     pub auction_id: u64,
     pub bid_handle: felt252,
-    pub identity_commitment: felt252,
+    pub group_handle: felt252,
+    pub tranche_index: u32,
     pub reveal_commitment: felt252,
     pub refund_commitment: felt252,
     pub winner_commitment: felt252,
 }
 
-/// Private input supplied to Whisper's STRK20 `privacy_compute` entrypoint.
-///
-/// These values are commitments or opaque identifiers; the bid amount is not
-/// included and remains in the encrypted note and reveal capsule until settlement.
+/// Initial bid submitted through the Wallet API's standard `privacy_invoke`
+/// boundary. The random nonce makes the bid group unlinkable to the wallet.
 #[derive(Copy, Drop, Serde, Debug, PartialEq)]
 pub struct BidIntent {
     pub auction_id: u64,
+    pub bid_nonce: felt252,
     pub reveal_commitment: felt252,
     pub refund_commitment: felt252,
     pub winner_commitment: felt252,
+}
+
+/// Additive funding tranche for an existing logical bid group.
+#[derive(Copy, Drop, Serde, Debug, PartialEq)]
+pub struct BidTopUpIntent {
+    pub auction_id: u64,
+    pub group_handle: felt252,
+    pub reveal_commitment: felt252,
+}
+
+/// Requests accepted through the Wallet API-compatible plain invoke boundary.
+#[derive(Copy, Drop, Serde, Debug, PartialEq)]
+pub enum WalletBidRequest {
+    SubmitBid: BidIntent,
+    AddBidTranche: BidTopUpIntent,
+}
+
+#[derive(Copy, Drop, Serde, Debug, PartialEq, starknet::Store)]
+pub struct BidGroup {
+    pub auction_id: u64,
+    pub group_handle: felt252,
+    pub refund_commitment: felt252,
+    pub winner_commitment: felt252,
+    pub tranche_count: u32,
+    pub funded_tranche_count: u32,
+    pub settled: bool,
 }
 
 #[derive(Copy, Drop, Serde, Debug, PartialEq, starknet::Store)]
 pub struct SealedBid {
     pub auction_id: u64,
     pub bid_handle: felt252,
-    pub identity_commitment: felt252,
+    pub group_handle: felt252,
+    pub tranche_index: u32,
     pub note_id: felt252,
     pub reveal_commitment: felt252,
     pub refund_commitment: felt252,
@@ -138,11 +165,10 @@ pub struct SettlementInput {
     pub settlement_hash: felt252,
 }
 
-/// Requests accepted by the canonical STRK20 `ComputeAndInvoke` boundary.
-/// The pool prepends the requester's contract-scoped identity key.
+/// Operator-only requests accepted by the canonical STRK20
+/// `ComputeAndInvoke` boundary.
 #[derive(Drop, Serde, Debug, PartialEq)]
 pub enum PrivacyRequest {
-    SubmitBid: BidIntent,
     AcceptBid: AcceptBidInput,
     Settle: SettlementInput,
     Abort: AbortInput,
@@ -153,7 +179,6 @@ pub enum PrivacyRequest {
 /// after the private operator identity has been authenticated.
 #[derive(Drop, Serde, Debug, PartialEq)]
 pub enum PrivacyCommand {
-    SubmitBid: BidSubmission,
     AcceptBid: AcceptBidInput,
     Settle: SettlementInput,
     Abort: AbortInput,

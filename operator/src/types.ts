@@ -18,6 +18,8 @@ export interface AuctionView {
 export interface BidView {
   auctionId: bigint;
   bidHandle: bigint;
+  groupHandle: bigint;
+  trancheIndex: number;
   noteId: bigint;
   revealCommitment: bigint;
   refundCommitment: bigint;
@@ -63,6 +65,7 @@ export interface SettlementOutput {
 
 export interface SettlementReveal {
   bidHandle: bigint;
+  groupHandle: bigint;
   amount: bigint;
   salt: bigint;
 }

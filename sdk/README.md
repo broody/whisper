@@ -1,13 +1,16 @@
 # Whisper SDK
 
-Headless request builders for composing Whisper callbacks with the official STRK20 Privacy SDK.
+Headless request builders for composing bidder actions through the STRK20 Wallet API and vault-operator callbacks through the official Privacy SDK.
 
-This is plumbing for wallet implementations and team-controlled SDK accounts. A normal dapp must never obtain a user's viewing key; it should request the combined transfer/callback through a compatible wallet API once that composition is exposed by the target wallet.
+The bidder path is ordinary dapp plumbing: the wallet owns note selection, viewing keys, proving, and relay submission. The operator path remains backend plumbing for the operator-controlled privacy vault.
 
 ## Submit a bid
 
 ```ts
-import { buildWhisperBidAction, computeRevealCommitment } from "@whisper-trade/sdk";
+import {
+  buildWhisperBidActions,
+  computeRevealCommitment,
+} from "@whisper-trade/sdk";
 
 const revealCommitment = computeRevealCommitment(
   auctionId,
@@ -17,18 +20,22 @@ const revealCommitment = computeRevealCommitment(
   winnerCommitment,
 );
 
-const action = buildWhisperBidAction({
+const { groupHandle, bidHandle, actions } = buildWhisperBidActions({
   whisperAddress,
+  paymentToken,
+  vaultAddress,
   auctionId,
+  bidNonce,
+  bidAmount: amount,
   revealCommitment,
   refundCommitment,
   winnerCommitment,
 });
 
-const result = await transfers.build().computeAndInvoke(action).execute();
+const result = await walletAccount.strk20InvokeTransaction(actions);
 ```
 
-The application must compose that callback with exactly one exact-value private transfer to the auction's configured vault account in the same pool batch. The helper does not move funds itself, and it intentionally does not require the newly created encrypted-note ID; the operator derives that from the batch events before accepting the bid.
+The returned tuple contains an exact-value private `transfer` followed by a standard `invoke` of Whisper's `privacy_invoke` entrypoint. The connected wallet executes them atomically and derives the newly created note ID internally; the operator correlates the note from pool events before accepting the tranche.
 
 It also uses authenticated hybrid encryption for the amount opening and refund routing material under the auction's separate `revealPublicKey`, then uploads that capsule for the operator.
 
@@ -59,7 +66,29 @@ const capsule = await encryptWhisperBidCapsule(
 
 Upload the returned envelope to the operator before submitting the private bid batch. The format uses Stark-curve ECDH, HKDF-SHA256, and AES-256-GCM; it is experimental and requires independent cryptographic review.
 
-It never accepts an identity key or viewing key. STRK20 derives the Whisper-scoped identity inside the proven computation and prepends it to `privacy_compute`.
+The builder never accepts an identity key, viewing key, note, or proof.
+
+## Increase a bid
+
+An increase is a second encrypted note in the same logical bid group:
+
+```ts
+import { buildWhisperBidTopUpActions } from "@whisper-trade/sdk";
+
+const actions = buildWhisperBidTopUpActions({
+  whisperAddress,
+  paymentToken,
+  vaultAddress,
+  auctionId,
+  groupHandle,
+  bidAmount: 30n,
+  revealCommitment: topUpRevealCommitment,
+});
+
+await walletAccount.strk20InvokeTransaction(actions);
+```
+
+If the original tranche is 50 and this tranche is 30, settlement prices that group as an 80-token bid. The operator creates one combined refund for a losing group or one combined winner-change output. A top-up cannot reduce or replace a previously transferred tranche.
 
 ## Operator actions
 
@@ -77,10 +106,10 @@ import {
 - `buildWhisperSettlementAction` encodes the complete ordered reveal set and expected result. Compose it with loser refunds, winner change, and proceeds in one private-operation batch.
 - `buildWhisperAbortAction` records the operator's recovery manifest after timeout.
 
-These builders serialize the four Cairo `PrivacyRequest` variants exactly: submit `0`, accept `1`, settle `2`, and abort `3`.
+These builders serialize the three operator-only Cairo `PrivacyRequest` variants exactly: accept `0`, settle `1`, and abort `2`. Bid submission has a separate Wallet API-compatible request enum: submit `0` and add tranche `1`.
 
 ## Security boundary
 
 The canonical pool proves that the vault controls consumed notes and that its private batch conserves value. Whisper verifies the public bid openings and Vickrey result. The current protocol does not cryptographically bind a submitted note's hidden token/amount to its bid or enforce the recipients and values represented by `outputsRoot`; the operator remains a custodian.
 
-`computeIdentityCommitment`, `computeOperatorIdentityCommitment`, `computeRevealCommitment`, and `computeBidHandle` mirror the Cairo Poseidon transcripts.
+`computeBidGroupHandle`, `computeBidHandle`, `computeOperatorIdentityCommitment`, and `computeRevealCommitment` mirror the Cairo Poseidon transcripts.

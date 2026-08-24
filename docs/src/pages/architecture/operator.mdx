@@ -5,7 +5,7 @@ description: The service components that discover notes, accept bids, and settle
 
 # Operator architecture
 
-The operator is a backend-controlled STRK20 privacy account plus a durable worker. It is the only component allowed to see the vault viewing key and the only party able to spend auction escrow notes.
+The operator is a backend-controlled STRK20 privacy account plus a durable worker. It is the only component allowed to see the vault viewing key and the only party able to spend auction escrow notes. Bidder proofs are produced by the bidder's compatible wallet and never pass through this service.
 
 ## Component map
 
@@ -38,7 +38,7 @@ flowchart TB
 |---|---|
 | `operator/src/starknet-chain.ts` | Reads auction/bid state, scans Whisper events, extracts pool `EncNoteCreated` IDs from receipts |
 | `operator/src/worker.ts` | Maintains the durable block cursor, retries submissions, recovers stale leases, schedules settlement |
-| `operator/src/engine.ts` | Matches notes, validates capsules, accepts bids, and constructs Vickrey settlement plans |
+| `operator/src/engine.ts` | Matches notes, validates capsules, accepts tranches, aggregates bid groups, and constructs Vickrey settlement plans |
 | `operator/src/strk20-vault.ts` | Adapts official SDK discovery/builders and submits proof-backed pool calls |
 | `operator/src/official-sdk.ts` | Constructs `createPrivateTransfers(...)` with injected providers and the vault's own key boundary |
 | `operator/src/sqlite-store.ts` | Persists capsules, submissions, auctions, leases, cursor, and idempotency state |
@@ -111,6 +111,11 @@ Claims use atomic SQLite updates so two loops cannot submit the same action simu
 Before resubmitting, the engine reconciles public onchain state. If the bid or auction already completed, it records that result locally instead of performing the action twice.
 
 ## SDK and proving boundary
+
+There are two distinct proving boundaries:
+
+- **Bidder:** the dapp supplies standard `transfer` + `invoke` actions to `strk20InvokeTransaction(actions)`. The wallet owns the bidder's notes and proof generation.
+- **Operator:** this backend directly composes the Privacy SDK for vault acceptance, settlement, abort, and vault maintenance.
 
 The official SDK instance is composed with:
 

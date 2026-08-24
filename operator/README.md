@@ -1,8 +1,10 @@
 # Whisper operator
 
-`@whisper-trade/operator` is the backend boundary for a 1-of-1 Whisper auction vault. It matches encrypted STRK20 notes with bid submissions, validates authenticated bid capsules, accepts funded bids, and builds one private settlement containing loser refunds, winner change, seller proceeds, and the Whisper callback.
+`@whisper-trade/operator` is the backend boundary for a 1-of-1 Whisper auction vault. It matches encrypted STRK20 note tranches with bid submissions, validates authenticated bid capsules, accepts funded tranches, aggregates them by logical bid group, and builds one private settlement containing group refunds, winner change, seller proceeds, and the Whisper callback.
 
 The operator controls its own privacy account and can see bids as soon as it discovers them. It does not receive or manage a bidder's viewing key.
+
+Bidder proving is not an operator responsibility. A compatible privacy wallet executes the dapp's standard `transfer` + `invoke` action array; this service needs proving infrastructure only for vault-owned acceptance, settlement, abort, and account-maintenance transactions.
 
 ## Included
 
@@ -17,7 +19,7 @@ The operator controls its own privacy account and can see bids as soon as it dis
 - `createOperatorService`: validates the chain, pool, vault address, viewing key, and reveal key before listening.
 - `createOperatorApi`: `GET /healthz`, `GET /v1/config`, and idempotent `POST /v1/capsules` endpoints.
 
-The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. The encrypted capsule is authenticated before matching, zero amount-matching notes remain retryable while discovery catches up, and multiple matching notes are rejected. Unrelated private change is allowed.
+The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. The encrypted capsule is authenticated before matching, zero amount-matching notes remain retryable while discovery catches up, and multiple matching notes are rejected. Unrelated private change is allowed. At settlement, accepted tranches sharing a group handle are summed before Vickrey pricing and use one committed refund/winner route.
 
 The canonical pool rejects an operator-only `ComputeAndInvoke` proof with no private state transition as `NO_REPLAY_PROTECTION`. Acceptance must consume and reissue a separate vault-owned replay note in the same batch; it must not spend the escrowed bid note. Durable replay-note selection and rotation is the remaining operator integration layer.
 

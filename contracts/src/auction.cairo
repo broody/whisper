@@ -1,5 +1,6 @@
 #[starknet::contract]
 pub mod WhisperAuction {
+    use core::dict::{Felt252Dict, Felt252DictTrait};
     use core::hash::HashStateTrait;
     use core::num::traits::Zero;
     use core::poseidon::PoseidonTrait;
@@ -9,14 +10,15 @@ pub mod WhisperAuction {
     };
     use starknet::{ContractAddress, get_block_timestamp, get_caller_address};
     use crate::hashes::{
-        compute_bid_handle, compute_identity_commitment, compute_operator_identity_commitment,
+        compute_bid_group_handle, compute_bid_handle, compute_operator_identity_commitment,
         compute_reveal_commitment,
     };
-    use crate::interface::{IWhisperAuction, IWhisperPrivacyAction};
+    use crate::interface::{IWhisperAuction, IWhisperBidAction, IWhisperPrivacyAction};
     use crate::pricing::compute_vickrey_price;
     use crate::types::{
-        AbortInput, AcceptBidInput, Auction, AuctionConfig, AuctionResult, AuctionStatus, BidIntent,
-        BidSubmission, OpenNoteDeposit, PrivacyCommand, PrivacyRequest, SealedBid, SettlementInput,
+        AbortInput, AcceptBidInput, Auction, AuctionConfig, AuctionResult, AuctionStatus, BidGroup,
+        BidIntent, BidSubmission, BidTopUpIntent, OpenNoteDeposit, PrivacyCommand, PrivacyRequest,
+        RevealedBid, SealedBid, SettlementInput, WalletBidRequest,
     };
 
     const ACCEPTED_BIDS_DOMAIN: felt252 = 'WHISPER_BIDS_V1';
@@ -27,9 +29,9 @@ pub mod WhisperAuction {
         pool_address: ContractAddress,
         next_auction_id: u64,
         auctions: Map<u64, Auction>,
+        bid_groups: Map<(u64, felt252), BidGroup>,
         bids: Map<(u64, felt252), SealedBid>,
         bid_handles: Map<(u64, u32), felt252>,
-        used_identities: Map<(u64, felt252), bool>,
         used_note_ids: Map<felt252, bool>,
         results: Map<u64, AuctionResult>,
     }
@@ -69,6 +71,8 @@ pub mod WhisperAuction {
         auction_id: u64,
         #[key]
         bid_handle: felt252,
+        group_handle: felt252,
+        tranche_index: u32,
         submission_index: u32,
     }
 
@@ -196,6 +200,12 @@ pub mod WhisperAuction {
             self.require_auction(auction_id)
         }
 
+        fn get_bid_group(self: @ContractState, auction_id: u64, group_handle: felt252) -> BidGroup {
+            let group = self.bid_groups.read((auction_id, group_handle));
+            assert!(group.group_handle.is_non_zero(), "BID_GROUP_NOT_FOUND");
+            group
+        }
+
         fn get_bid(self: @ContractState, auction_id: u64, bid_handle: felt252) -> SealedBid {
             let bid = self.bids.read((auction_id, bid_handle));
             assert!(bid.bid_handle.is_non_zero(), "BID_NOT_FOUND");
@@ -216,18 +226,27 @@ pub mod WhisperAuction {
     }
 
     #[abi(embed_v0)]
+    impl WhisperBidActionImpl of IWhisperBidAction<ContractState> {
+        fn privacy_invoke(
+            ref self: ContractState, request: WalletBidRequest,
+        ) -> Span<OpenNoteDeposit> {
+            self.assert_pool();
+            match request {
+                WalletBidRequest::SubmitBid(intent) => self.submit_bid_group(intent),
+                WalletBidRequest::AddBidTranche(intent) => self.add_bid_tranche(intent),
+            }
+            let deposits: Array<OpenNoteDeposit> = array![];
+            deposits.span()
+        }
+    }
+
+    #[abi(embed_v0)]
     impl WhisperPrivacyActionImpl of IWhisperPrivacyAction<ContractState> {
         fn privacy_compute(
             self: @ContractState, identity_key: felt252, request: PrivacyRequest,
         ) -> PrivacyCommand {
             assert!(identity_key.is_non_zero(), "ZERO_IDENTITY_KEY");
             match request {
-                PrivacyRequest::SubmitBid(intent) => {
-                    let auction = self.require_auction(intent.auction_id);
-                    assert!(auction.status == AuctionStatus::Bidding, "NOT_BIDDING");
-                    assert!(get_block_timestamp() < auction.bidding_deadline, "BIDDING_CLOSED");
-                    PrivacyCommand::SubmitBid(self.bid_from_intent(identity_key, intent))
-                },
                 PrivacyRequest::AcceptBid(input) => {
                     self.assert_operator(identity_key, input.auction_id);
                     PrivacyCommand::AcceptBid(input)
@@ -248,7 +267,6 @@ pub mod WhisperAuction {
         ) -> Span<OpenNoteDeposit> {
             self.assert_pool();
             match command {
-                PrivacyCommand::SubmitBid(bid) => self.record_bid_submission(bid),
                 PrivacyCommand::AcceptBid(input) => self.accept_funded_bid(input),
                 PrivacyCommand::Settle(input) => self.settle_auction(input),
                 PrivacyCommand::Abort(input) => self.abort_auction(input),
@@ -279,28 +297,74 @@ pub mod WhisperAuction {
             );
         }
 
-        fn bid_from_intent(
-            self: @ContractState, identity_key: felt252, intent: BidIntent,
-        ) -> BidSubmission {
+        fn submit_bid_group(ref self: ContractState, intent: BidIntent) {
+            assert!(intent.bid_nonce.is_non_zero(), "ZERO_BID_NONCE");
             assert!(intent.reveal_commitment.is_non_zero(), "ZERO_REVEAL_COMMITMENT");
             assert!(intent.refund_commitment.is_non_zero(), "ZERO_REFUND");
             assert!(intent.winner_commitment.is_non_zero(), "ZERO_WINNER_COMMITMENT");
-            let identity_commitment = compute_identity_commitment(identity_key, intent.auction_id);
-            let bid_handle = compute_bid_handle(
+            let group_handle = compute_bid_group_handle(
                 intent.auction_id,
-                identity_commitment,
-                intent.reveal_commitment,
+                intent.bid_nonce,
                 intent.refund_commitment,
                 intent.winner_commitment,
             );
-            BidSubmission {
-                auction_id: intent.auction_id,
-                bid_handle,
-                identity_commitment,
-                reveal_commitment: intent.reveal_commitment,
-                refund_commitment: intent.refund_commitment,
-                winner_commitment: intent.winner_commitment,
-            }
+            assert!(group_handle.is_non_zero(), "ZERO_GROUP_HANDLE");
+            assert!(
+                self.bid_groups.read((intent.auction_id, group_handle)).group_handle.is_zero(),
+                "DUPLICATE_BID_GROUP",
+            );
+            self
+                .bid_groups
+                .write(
+                    (intent.auction_id, group_handle),
+                    BidGroup {
+                        auction_id: intent.auction_id,
+                        group_handle,
+                        refund_commitment: intent.refund_commitment,
+                        winner_commitment: intent.winner_commitment,
+                        tranche_count: 0,
+                        funded_tranche_count: 0,
+                        settled: false,
+                    },
+                );
+            self
+                .record_bid_submission(
+                    BidSubmission {
+                        auction_id: intent.auction_id,
+                        bid_handle: compute_bid_handle(
+                            intent.auction_id, group_handle, 0, intent.reveal_commitment,
+                        ),
+                        group_handle,
+                        tranche_index: 0,
+                        reveal_commitment: intent.reveal_commitment,
+                        refund_commitment: intent.refund_commitment,
+                        winner_commitment: intent.winner_commitment,
+                    },
+                );
+        }
+
+        fn add_bid_tranche(ref self: ContractState, intent: BidTopUpIntent) {
+            assert!(intent.group_handle.is_non_zero(), "ZERO_GROUP_HANDLE");
+            assert!(intent.reveal_commitment.is_non_zero(), "ZERO_REVEAL_COMMITMENT");
+            let group = self.bid_groups.read((intent.auction_id, intent.group_handle));
+            assert!(group.group_handle.is_non_zero(), "BID_GROUP_NOT_FOUND");
+            assert!(!group.settled, "BID_GROUP_SETTLED");
+            let tranche_index = group.tranche_count;
+            let bid_handle = compute_bid_handle(
+                intent.auction_id, intent.group_handle, tranche_index, intent.reveal_commitment,
+            );
+            self
+                .record_bid_submission(
+                    BidSubmission {
+                        auction_id: intent.auction_id,
+                        bid_handle,
+                        group_handle: intent.group_handle,
+                        tranche_index,
+                        reveal_commitment: intent.reveal_commitment,
+                        refund_commitment: group.refund_commitment,
+                        winner_commitment: group.winner_commitment,
+                    },
+                );
         }
 
         fn record_bid_submission(ref self: ContractState, bid: BidSubmission) {
@@ -308,7 +372,7 @@ pub mod WhisperAuction {
             assert!(auction.status == AuctionStatus::Bidding, "NOT_BIDDING");
             assert!(get_block_timestamp() < auction.bidding_deadline, "BIDDING_CLOSED");
             assert!(bid.bid_handle.is_non_zero(), "ZERO_BID_HANDLE");
-            assert!(bid.identity_commitment.is_non_zero(), "ZERO_IDENTITY");
+            assert!(bid.group_handle.is_non_zero(), "ZERO_GROUP_HANDLE");
             assert!(bid.reveal_commitment.is_non_zero(), "ZERO_REVEAL_COMMITMENT");
             assert!(bid.refund_commitment.is_non_zero(), "ZERO_REFUND");
             assert!(bid.winner_commitment.is_non_zero(), "ZERO_WINNER_COMMITMENT");
@@ -316,16 +380,16 @@ pub mod WhisperAuction {
                 self.bids.read((bid.auction_id, bid.bid_handle)).bid_handle.is_zero(),
                 "DUPLICATE_BID_HANDLE",
             );
-            assert!(
-                !self.used_identities.read((bid.auction_id, bid.identity_commitment)),
-                "DUPLICATE_IDENTITY",
-            );
+            let mut group = self.bid_groups.read((bid.auction_id, bid.group_handle));
+            assert!(group.group_handle.is_non_zero(), "BID_GROUP_NOT_FOUND");
+            assert!(bid.tranche_index == group.tranche_count, "WRONG_TRANCHE_INDEX");
 
             let submission_index = auction.submission_count;
             let sealed_bid = SealedBid {
                 auction_id: bid.auction_id,
                 bid_handle: bid.bid_handle,
-                identity_commitment: bid.identity_commitment,
+                group_handle: bid.group_handle,
+                tranche_index: bid.tranche_index,
                 note_id: 0,
                 reveal_commitment: bid.reveal_commitment,
                 refund_commitment: bid.refund_commitment,
@@ -336,13 +400,18 @@ pub mod WhisperAuction {
             };
 
             self.bids.write((bid.auction_id, bid.bid_handle), sealed_bid);
-            self.used_identities.write((bid.auction_id, bid.identity_commitment), true);
+            group.tranche_count += 1;
+            self.bid_groups.write((bid.auction_id, bid.group_handle), group);
             auction.submission_count += 1;
             self.auctions.write(bid.auction_id, auction);
             self
                 .emit(
                     BidSubmitted {
-                        auction_id: bid.auction_id, bid_handle: bid.bid_handle, submission_index,
+                        auction_id: bid.auction_id,
+                        bid_handle: bid.bid_handle,
+                        group_handle: bid.group_handle,
+                        tranche_index: bid.tranche_index,
+                        submission_index,
                     },
                 );
         }
@@ -366,6 +435,9 @@ pub mod WhisperAuction {
             bid.funded = true;
             bid.note_id = input.note_id;
             self.bids.write((input.auction_id, input.bid_handle), bid);
+            let mut group = self.bid_groups.read((input.auction_id, bid.group_handle));
+            group.funded_tranche_count += 1;
+            self.bid_groups.write((input.auction_id, bid.group_handle), group);
             self.used_note_ids.write(input.note_id, true);
             self.bid_handles.write((input.auction_id, bid_index), input.bid_handle);
             auction.accepted_bids_hash = accepted_bids_hash;
@@ -405,13 +477,16 @@ pub mod WhisperAuction {
 
             let expected_len: usize = auction.bid_count.into();
             assert!(revealed_bids.len() == expected_len, "INCOMPLETE_BID_SET");
+            let mut group_totals: Felt252Dict<u128> = Default::default();
+            let mut seen_groups: Felt252Dict<bool> = Default::default();
+            let mut group_handles: Array<felt252> = array![];
             let mut index = 0;
             while index < revealed_bids.len() {
                 let revealed = *revealed_bids.at(index);
                 let bid_index: u32 = index.try_into().unwrap();
                 let expected_handle = self.bid_handles.read((auction_id, bid_index));
                 assert!(revealed.bid_handle == expected_handle, "BID_ORDER_MISMATCH");
-                assert!(revealed.amount >= auction.reserve_price, "BID_BELOW_RESERVE");
+                assert!(revealed.amount.is_non_zero(), "ZERO_BID_TRANCHE");
                 let bid = self.bids.read((auction_id, revealed.bid_handle));
                 assert!(bid.funded, "BID_NOT_FUNDED");
                 assert!(
@@ -425,6 +500,12 @@ pub mod WhisperAuction {
                         .reveal_commitment,
                     "INVALID_REVEAL",
                 );
+                let total = group_totals.get(bid.group_handle) + revealed.amount;
+                group_totals.insert(bid.group_handle, total);
+                if !seen_groups.get(bid.group_handle) {
+                    seen_groups.insert(bid.group_handle, true);
+                    group_handles.append(bid.group_handle);
+                }
                 self
                     .emit(
                         BidRevealed {
@@ -434,7 +515,19 @@ pub mod WhisperAuction {
                 index += 1;
             }
 
-            let result = if revealed_bids.is_empty() {
+            let mut aggregate_bids: Array<RevealedBid> = array![];
+            index = 0;
+            while index < group_handles.len() {
+                let group_handle = *group_handles.at(index);
+                let amount = group_totals.get(group_handle);
+                if amount >= auction.reserve_price {
+                    aggregate_bids
+                        .append(RevealedBid { bid_handle: group_handle, amount, salt: 0 });
+                }
+                index += 1;
+            }
+
+            let result = if aggregate_bids.is_empty() {
                 assert!(winner_bid_handle.is_zero(), "UNEXPECTED_WINNER");
                 AuctionResult {
                     auction_id,
@@ -450,10 +543,10 @@ pub mod WhisperAuction {
                     settled_at: now,
                 }
             } else {
-                let pricing = compute_vickrey_price(revealed_bids, auction.reserve_price);
+                let pricing = compute_vickrey_price(aggregate_bids.span(), auction.reserve_price);
                 assert!(pricing.winner_bid_handle == winner_bid_handle, "WRONG_WINNER");
-                let winner = self.bids.read((auction_id, winner_bid_handle));
-                assert!(winner.funded, "WINNER_NOT_FUNDED");
+                let winner = self.bid_groups.read((auction_id, winner_bid_handle));
+                assert!(winner.funded_tranche_count.is_non_zero(), "WINNER_NOT_FUNDED");
                 AuctionResult {
                     auction_id,
                     has_winner: true,
@@ -475,6 +568,9 @@ pub mod WhisperAuction {
                 let mut bid = self.bids.read((auction_id, revealed.bid_handle));
                 bid.settled = true;
                 self.bids.write((auction_id, revealed.bid_handle), bid);
+                let mut group = self.bid_groups.read((auction_id, bid.group_handle));
+                group.settled = true;
+                self.bid_groups.write((auction_id, bid.group_handle), group);
                 index += 1;
             }
 

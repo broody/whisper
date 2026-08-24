@@ -6,20 +6,20 @@ Generated 2026-08-23 by the strk20-privacy-integration skill. Upstream versions 
 
 - Stack: Cairo 2.13.1 auction contract in `contracts/`; TypeScript 7 and starknet.js 10.7.1 action SDK in `sdk/`; Node 24 operator package in `operator/`.
 - Relevant code: `sdk/src/bid-action.ts` composes bidder callbacks, `sdk/src/operator-actions.ts` composes operator callbacks, and `contracts/src/auction.cairo` verifies bid acceptance and Vickrey settlement.
-- Privacy goal: keep bids and private output destinations off the public chain until settlement while a 1-of-1 backend vault discovers escrow notes, force-reveals every accepted bid, and returns losers' funds without bidder action.
+- Privacy goal: keep bids and private output destinations off the public chain until settlement while a 1-of-1 backend vault discovers escrow notes, force-reveals every accepted tranche, aggregates logical bid groups, and returns losers' funds without bidder action.
 - Environment: Sepolia integration first, followed by the canonical STRK20 mainnet pool for the hackathon; the service controls its own Starknet account, viewing key, reveal key, and relay account.
 
-## 2. Chosen route: Privacy SDK direct
+## 2. Chosen routes: Wallet API bidder + Privacy SDK operator
 
-Whisper is a backend-managed privacy account, so it can use the official TypeScript Privacy SDK directly. Browser applications never receive a user's viewing key; the operator handles only the vault's own viewing key and the separate application reveal key.
+Browser bidders use the standard STRK20 Wallet API. Their compatible wallet selects notes, generates proofs, and relays the atomic transfer + invoke; the dapp never receives a viewing key or proof. Whisper's backend-managed vault separately uses the official TypeScript Privacy SDK for acceptance, settlement, abort, and vault maintenance, handling only its own viewing key and application reveal key.
 
 ## 3. What this delivers — hidden vs visible
 
 | Private | Public |
 |---|---|
-| Bid amount before settlement, refund recipient, private note ownership, private settlement recipients | Auction configuration, bid handles and commitments, accepted note IDs, transaction timing, submission and funded-bid counts |
+| Bid and tranche amounts before settlement, refund recipient, private note ownership, private settlement recipients | Auction configuration, group/tranche handles and commitments, accepted note IDs, transaction timing, submission and funded-tranche counts |
 | Bidder-to-vault transfer details inside the pool | Any separate public shield or unshield amount and address |
-| Vault output recipients after settlement | Accepted bid amounts, winner, clearing price, and settlement transcript roots |
+| Vault output recipients after settlement | Accepted tranche amounts, aggregate winner, clearing price, and settlement transcript roots |
 
 The 1-of-1 operator can decrypt bid capsules and vault notes as soon as they are discovered; this is confidentiality from the public and other bidders, not from the operator. During Sepolia testing, the hosted discovery and proving service operators are also inside the trust boundary; mainnet restores the intended operator-only service boundary by self-hosting both components.
 
@@ -28,6 +28,7 @@ The 1-of-1 operator can decrypt bid capsules and vault notes as soon as they are
 - Node.js 24 or later.
 - `@starkware-libs/starknet-privacy-sdk@0.14.3-rc.5`, confirmed in the upstream monorepo on 2026-08-23; it is distributed through GitHub Packages.
 - `starknet@10.7.1`.
+- Wallet API specification v0.10.3 through a compatible privacy wallet. If a consuming dapp uses get-starknet v6 directly, re-check the current `next` pins; discovery was 6.0.4 and wallet-standard was 6.0.5 on 2026-08-24.
 - Sepolia privacy pool v2.0 at `0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91`.
 - Canonical pool, proving service, discovery indexer, Starknet RPC, relayer, and deployed Whisper addresses for the selected chain.
 - Secret-manager providers for the vault account signing key, vault viewing key, reveal private key, and relayer signing key.
@@ -60,9 +61,19 @@ After the force-reveal deadline, the operator decrypted the authenticated capsul
 
 The operator now has an explicit `sepolia` preset for the deployed pool, PublicNode RPC, and the publicly reachable StarkWare alpha-Sepolia discovery and transaction-prover endpoints. The prover responded with RPC spec `0.10.3-rc.2`, and the official SDK reported discovery status `OK`, on 2026-08-23. These endpoints have no published availability commitment, so they remain replaceable environment configuration rather than mainnet dependencies.
 
-## 7. Phase 3 — mainnet integration and operational hardening
+## 7. Phase 3 — Wallet API bidder ingress and additive tranches ✅ done locally 2026-08-24
 
-1. Repeat the Sepolia-verified register → private bid transfer/callback → discovery → accept → settlement lifecycle against the canonical mainnet pool with disposable low-value accounts.
+1. Replace bidder `ComputeAndInvoke` with the Wallet API's atomic standard `transfer` + `invoke` action array.
+2. Add a pool-only `privacy_invoke(WalletBidRequest)` Cairo boundary while retaining `ComputeAndInvoke` only for operator-authenticated actions.
+3. Model bid increases as additive encrypted-note tranches grouped by a random-nonce-derived public handle.
+4. Aggregate funded tranches by group before Vickrey pricing and combine each group's refund or winner change.
+5. Verify exact Wallet API encoding, cross-language hashes, group pricing, output conservation, and operator ABI decoding in local Cairo and TypeScript tests.
+
+The standard-invoke class is deployed on Sepolia and a direct official-SDK transfer + invoke bid completed discovery, acceptance, force reveal, and settlement against the canonical pool. A manual Ready Wallet bid and additive top-up test are still required before marking the external integration complete.
+
+## 8. Phase 4 — mainnet integration and operational hardening
+
+1. After the new wallet flow succeeds on Sepolia, repeat register → wallet bid/top-up → discovery → accept → settlement against the canonical mainnet pool with disposable low-value accounts.
 2. Move all four keys into the deployment secret manager; keep them out of SQLite, logs, images, and repository files.
 3. Deploy the operator separately from Stake Wars' Go API/Torii machine, with one durable database, health checks, request-size limits, capsule upload rate limiting, job alerts, and backups.
 4. Add recovery-manifest/refund automation and alert before `abort_after`.
@@ -70,24 +81,27 @@ The operator now has an explicit `sepolia` preset for the deployed pool, PublicN
 
 Mainnet registration, deployment, and transactions require explicit approval when this phase begins.
 
-## 8. Testing
+## 9. Testing
 
 - Headless: SDK and operator typecheck/build/tests; Cairo format/build/tests.
 - Integration: official SDK against the selected canonical pool and discovery/proving services.
-- Manual: register the service-owned vault, shield a small test amount in a separate transaction, privately transfer an exact bid note, verify discovery and acceptance, then settle and discover all private outputs.
+- Manual bidder: connect Ready, submit the SDK's `[transfer, invoke]` actions through `strk20InvokeTransaction(actions)`, then add a tranche to the same group.
+- Manual operator: verify discovery and acceptance of each tranche, settle the aggregate groups, and discover all private outputs.
 - Pure local tests verify orchestration but do not prove compatibility with hosted proving, discovery, screening, or the deployed pool ABI.
 
-## 9. Compliance and security notes
+## 10. Compliance and security notes
 
 - Deposit screening is enforced onchain by the protocol and applies regardless of proving provider.
 - Selective disclosure can support legitimate requests but is not automatic compliance or regulator endorsement; the application owns its legal and compliance decisions.
 - A normal dapp never handles a user's viewing key, notes, or proofs. The backend stores only its own vault credentials through injected secret providers.
 - The application-layer capsule format is experimental and unaudited.
 
-## 10. Open items to re-verify at build time
+## 11. Open items to re-verify at build time
 
 - Canonical mainnet pool ABI and the exact pool event fields needed to derive output note IDs from a transaction.
 - Current Privacy SDK release, package-registry authentication, proving URL, discovery URL, and relayer submission requirements.
+- Current Wallet API version, Ready support for atomic `transfer` + standard `invoke`, and exact Starknet.js/get-starknet pins in the consuming dapp.
+- Deploy the new Wallet API callback ABI to Sepolia and complete initial-bid plus additive-tranche testing with Ready.
 - Confirm whether the alpha-Sepolia proving and discovery services are formally supported for sprint teams; until then, treat them as replaceable test infrastructure.
 - Run a self-hosted transaction prover for mainnet operator settlement; bidders should shield through a privacy-enabled wallet so the operator prover does not need to originate screened deposits.
 - Design and automate a durable inventory of vault-owned replay-protection notes for operator-only acceptance transactions; a bare `ComputeAndInvoke` callback is rejected as `NO_REPLAY_PROTECTION`.
@@ -95,7 +109,7 @@ Mainnet registration, deployment, and transactions require explicit approval whe
 - Capsule cryptographic review and key-rotation policy.
 - Committee-ready custody remains deferred in [GitHub issue #1](https://github.com/broody/whisper/issues/1) until the Sepolia end-to-end path works.
 
-## 11. Links
+## 12. Links
 
 - [Official Privacy SDK](https://github.com/starkware-libs/starknet-privacy/blob/main/sdk/README.md)
 - [SDK getting started](https://strk20-by-example.org/sdk/getting-started)
@@ -103,3 +117,5 @@ Mainnet registration, deployment, and transactions require explicit approval whe
 - [Note discovery](https://strk20-by-example.org/sdk/note-discovery)
 - [Multi-operation batches](https://strk20-by-example.org/sdk/multi-op-batch)
 - [Actions and proofs](https://strk20-by-example.org/actions-and-proofs)
+- [Wallet API overview](https://strk20-by-example.org/starknet-wallet-api/overview)
+- [Wallet API private DeFi](https://strk20-by-example.org/starknet-wallet-api/private-defi)

@@ -5,15 +5,15 @@ description: Every Whisper auction state, bid commitment, deadline, and settleme
 
 # Bid lifecycle
 
-Whisper separates **submission** from **funding**. A private identity can submit a commitment, but the bid only enters the auction after the operator has matched and validated its escrow note.
+Whisper separates **submission** from **funding**. A wallet can atomically transfer a private note and submit its commitment, but the tranche only enters the auction after the operator has matched and validated the escrow note.
 
 ## Auction state
 
 ```mermaid
 stateDiagram-v2
   [*] --> Bidding: create auction
-  Bidding --> Bidding: submit unfunded bid
-  Bidding --> Bidding: accept funded bid
+  Bidding --> Bidding: submit unfunded tranche
+  Bidding --> Bidding: accept funded tranche
   Bidding --> Settled: settle in reveal window
   Bidding --> Aborted: abort after timeout
   Settled --> [*]
@@ -24,13 +24,14 @@ stateDiagram-v2
 
 ## Bid state
 
-Each stored bid contains:
+Each stored tranche contains:
 
 | Field | Purpose |
 |---|---|
 | `auction_id` | Domain separation and lookup |
-| `bid_handle` | Deterministic public bid identifier and tie-breaker |
-| `identity_commitment` | Enforces one bid per private identity per auction |
+| `bid_handle` | Deterministic public tranche identifier |
+| `group_handle` | Links additive tranches into one logical bid and acts as the tie-breaker |
+| `tranche_index` | Position within the logical bid group |
 | `note_id` | Identifies the accepted vault note; zero before funding |
 | `reveal_commitment` | Commits to amount, salt, refund route, and winner payload |
 | `refund_commitment` | Commits to the private refund recipient |
@@ -41,18 +42,32 @@ Each stored bid contains:
 
 ## Submission
 
-The bidder's private action calls `PrivacyRequest::SubmitBid` with:
+The SDK returns two standard Wallet API actions:
+
+```text
+transfer(payment_token, amount, vault_address)
+invoke(whisper_address, WalletBidRequest::SubmitBid(...))
+```
+
+The initial request contains:
 
 ```text
 auction_id
+bid_nonce
 reveal_commitment
 refund_commitment
 winner_commitment
 ```
 
-The pool supplies a contract-scoped identity key to Whisper's private computation. Whisper derives `identity_commitment` and `bid_handle`, rejects a duplicate identity, stores the bid as unfunded, and emits `BidSubmitted`.
+The dapp passes both actions to `strk20InvokeTransaction(actions)`. The compatible wallet selects private inputs, generates the proof, and relays the atomic pool transaction. Whisper derives a random-nonce-based `group_handle` and its first `bid_handle`, stores the tranche as unfunded, and emits `BidSubmitted`.
 
 No maximum bid appears in that request.
+
+## Increasing a bid
+
+An increase transfers another exact-value encrypted note and invokes `WalletBidRequest::AddBidTranche` with the existing group handle and a fresh reveal commitment. If a bidder first transfers 50 and later transfers 30, settlement treats the group as one 80-token bid.
+
+Increases are additive. They cannot replace, cancel, or reduce earlier tranches. The public can see that a group received another tranche and when it happened, but not the tranche amount or bidder wallet.
 
 ## Funding acceptance
 
@@ -64,9 +79,9 @@ bid_handle
 note_id
 ```
 
-Whisper verifies the operator's private identity commitment, that the auction is accepting notes, that the note ID has not funded another bid, and that the bid is not already funded. The contract then appends the handle to its ordered accepted set.
+Whisper verifies the operator's private identity commitment, that the auction is accepting notes, that the note ID has not funded another tranche, and that the tranche is not already funded. The contract then appends the tranche handle to its ordered accepted set. Auction `max_bids` currently limits accepted tranches, not unique groups.
 
-The ordered set has a rolling `accepted_bids_hash`. Settlement must use that same order and hash, which prevents the operator from quietly omitting or reordering funded bids in the claimed result.
+The ordered set has a rolling `accepted_bids_hash`. Settlement must use that same order and hash, which prevents the operator from quietly omitting or reordering funded tranches in the claimed result.
 
 ## Deadlines and grace period
 
@@ -84,22 +99,22 @@ The grace period must be long enough for the submitted transaction to be indexed
 
 ## Force reveal
 
-The current implementation uses one operator, so “force reveal” means the service can reveal every funded bid without waiting for bidder cooperation. It is not a threshold committee and it is not a bidder-side commit/reveal transaction.
+The current implementation uses one operator, so “force reveal” means the service can reveal every funded tranche without waiting for bidder cooperation. It is not a threshold committee and it is not a bidder-side commit/reveal transaction.
 
-During settlement, the operator sends every accepted opening:
+During settlement, the operator sends every accepted tranche opening:
 
 ```text
 (bid_handle, amount, salt)
 ```
 
-Whisper recomputes each `reveal_commitment`. A missing, reordered, or invalid opening fails the transaction.
+Whisper recomputes each `reveal_commitment`. A missing, reordered, or invalid opening fails the transaction. It then sums valid tranche amounts by `group_handle` before pricing.
 
 ## Winner selection
 
 The winner is the bid with:
 
-1. the greatest amount; then
-2. the smallest `bid_handle` when amounts tie.
+1. the greatest aggregate amount at or above the reserve; then
+2. the smallest `group_handle` when aggregate amounts tie.
 
 The clearing price is:
 
@@ -109,15 +124,16 @@ max(reserve_price, second_highest_bid)
 
 Special cases:
 
-- **No funded bids:** no winner and zero clearing price.
-- **One funded bid:** the bidder pays the reserve.
-- **Tied highest bids:** the smallest handle wins and pays the tied amount.
+- **No funded tranches:** no winner and zero clearing price.
+- **Only groups below reserve:** no winner and every group is fully refunded.
+- **One eligible funded group:** the bidder pays the reserve.
+- **Tied highest groups:** the smallest group handle wins and pays the tied amount.
 
 ## Settlement outputs
 
-For every funded bid, the operator already controls an exact-value vault note. It builds:
+For every funded tranche, the operator controls an exact-value vault note. It builds:
 
-- one full refund note for each loser;
+- one combined refund note for each losing group;
 - one change note for the winner when `winning_bid > clearing_price`; and
 - one proceeds note for the seller worth `clearing_price`.
 

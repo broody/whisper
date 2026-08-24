@@ -1,7 +1,7 @@
 use starknet::ContractAddress;
 use crate::types::{
-    Auction, AuctionConfig, AuctionResult, OpenNoteDeposit, PrivacyCommand, PrivacyRequest,
-    SealedBid,
+    Auction, AuctionConfig, AuctionResult, BidGroup, OpenNoteDeposit, PrivacyCommand,
+    PrivacyRequest, SealedBid, WalletBidRequest,
 };
 
 #[starknet::interface]
@@ -10,9 +10,16 @@ pub trait IWhisperAuction<TContractState> {
 
     fn get_pool_address(self: @TContractState) -> ContractAddress;
     fn get_auction(self: @TContractState, auction_id: u64) -> Auction;
+    fn get_bid_group(self: @TContractState, auction_id: u64, group_handle: felt252) -> BidGroup;
     fn get_bid(self: @TContractState, auction_id: u64, bid_handle: felt252) -> SealedBid;
     fn get_bid_handle(self: @TContractState, auction_id: u64, index: u32) -> felt252;
     fn get_result(self: @TContractState, auction_id: u64) -> AuctionResult;
+}
+
+/// Wallet API-compatible STRK20 `Invoke` target implemented by Whisper.
+#[starknet::interface]
+pub trait IWhisperBidAction<TContractState> {
+    fn privacy_invoke(ref self: TContractState, request: WalletBidRequest) -> Span<OpenNoteDeposit>;
 }
 
 /// STRK20 `ComputeAndInvoke` target implemented by `WhisperAuction`.

@@ -25,9 +25,9 @@ The operator can learn bids early. “Sealed bid” here means sealed against th
 | Private | Public |
 |---|---|
 | Bid amount and salt | Auction token, reserve, capacity, deadlines |
-| Wallet behind the pool-derived identity | Bid handle and commitments |
+| Bidder wallet, viewing key, notes, and bid nonce | Group/tranche handles and commitments |
 | Vault note token/amount to ordinary observers | Accepted note ID |
-| Refund destination | Submission/funded counts and timestamps |
+| Refund destination | Submission/funded-tranche counts and timestamps |
 | Winner payload plaintext | Rolling accepted-bid hash |
 
 ### After settlement
@@ -57,15 +57,18 @@ These guarantees prevent counterfeit value and double spending. They do not unde
 The Cairo contract guarantees:
 
 - private state changes come only through the configured pool;
-- a contract-scoped identity cannot submit twice to one auction;
+- group and tranche handles cannot be submitted twice;
 - only the committed operator identity can accept, settle, or abort;
 - accepted note IDs cannot be reused;
-- the complete ordered funded-bid set is used;
-- every published amount opens its bid-time commitment;
+- the complete ordered funded-tranche set is used;
+- every published tranche amount opens its bid-time commitment;
+- tranche amounts are summed by their committed group before pricing;
 - the winner and tie-break are deterministic; and
 - the clearing price is correct.
 
 It does not hold or decrypt the notes.
+
+The bidder and operator use different proving boundaries. A compatible wallet proves bidder `transfer` + `invoke` actions without exposing the user's viewing key to the dapp or Whisper backend. The operator's proving service receives only vault-owned acceptance and settlement work; moving bidder submission to the Wallet API does not remove the operator prover requirement.
 
 ## What bidders trust the operator to do
 

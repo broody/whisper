@@ -27,7 +27,7 @@ export interface WhisperSettlement extends WhisperActionTarget {
   auctionId: FeltLike;
   acceptedBidsHash: FeltLike;
   revealedBids: readonly WhisperRevealedBid[];
-  /** Zero only when the accepted bid set is empty. */
+  /** Zero only when no funded group meets the reserve. */
   winnerBidHandle: FeltLike;
   revealsRoot: FeltLike;
   outputsRoot: FeltLike;
@@ -56,7 +56,7 @@ function buildAction(
 /** Operator-only acknowledgement that the vault received and decrypted a matching note. */
 export function buildWhisperAcceptBidAction(input: WhisperAcceptBid): ComputeAndInvokeBuilder {
   return buildAction(input.whisperAddress, [
-    1n, // PrivacyRequest::AcceptBid
+    0n, // PrivacyRequest::AcceptBid
     u64("auctionId", input.auctionId),
     positiveFelt("bidHandle", input.bidHandle),
     positiveFelt("noteId", input.noteId),
@@ -77,9 +77,6 @@ export function buildWhisperSettlementAction(input: WhisperSettlement): ComputeA
   if (input.revealedBids.length === 0 && winnerBidHandle !== 0n) {
     throw new RangeError("winnerBidHandle must be zero for an empty bid set");
   }
-  if (input.revealedBids.length > 0 && winnerBidHandle === 0n) {
-    throw new RangeError("winnerBidHandle must be non-zero for a non-empty bid set");
-  }
   const revealedBids = input.revealedBids.flatMap((bid, index) => [
     positiveFelt(`revealedBids[${index}].bidHandle`, bid.bidHandle),
     u128(`revealedBids[${index}].amount`, bid.amount),
@@ -87,7 +84,7 @@ export function buildWhisperSettlementAction(input: WhisperSettlement): ComputeA
   ]);
 
   return buildAction(input.whisperAddress, [
-    2n, // PrivacyRequest::Settle
+    1n, // PrivacyRequest::Settle
     u64("auctionId", input.auctionId),
     positiveFelt("acceptedBidsHash", input.acceptedBidsHash),
     BigInt(input.revealedBids.length),
@@ -102,7 +99,7 @@ export function buildWhisperSettlementAction(input: WhisperSettlement): ComputeA
 /** Operator-only terminal recovery record after the auction's abort deadline. */
 export function buildWhisperAbortAction(input: WhisperAbort): ComputeAndInvokeBuilder {
   return buildAction(input.whisperAddress, [
-    3n, // PrivacyRequest::Abort
+    2n, // PrivacyRequest::Abort
     u64("auctionId", input.auctionId),
     positiveFelt("recoveryHash", input.recoveryHash),
   ]);

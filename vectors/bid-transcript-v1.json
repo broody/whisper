@@ -1,18 +1,19 @@
 {
   "version": 1,
   "domains": {
-    "identity": "WHISPER_ID_V1",
-    "bid": "WHISPER_BID_V1"
+    "group": "WHISPER_GROUP_V1",
+    "tranche": "WHISPER_TRANCHE_V1"
   },
   "input": {
-    "identityKey": "0xabc",
     "auctionId": "0x1",
+    "bidNonce": "0xabc",
     "revealCommitment": "0x701",
     "refundCommitment": "0x702",
-    "winnerCommitment": "0x703"
+    "winnerCommitment": "0x703",
+    "trancheIndex": "0x0"
   },
   "output": {
-    "identityCommitment": "0x388934032e394e858e5fd474159ead3a6dd48d0419c2a4b9ffa38c353b72ef1",
-    "bidHandle": "0x11c9d1b216ef5e67b87296fe6d25da64c546d2d1a95af2de7a56e37a7abaf5b"
+    "groupHandle": "0xe8fdc2a31cc7c303e4a77bd5656145cd299cfeef0dbb110ef69b2f4daf123f",
+    "bidHandle": "0x56fe80448dce869e7b460dd35c343d5018dd0b0a085bc5ff8aaa2bc6abd64f"
   }
 }

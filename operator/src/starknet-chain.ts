@@ -87,18 +87,20 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
       entrypoint: "get_bid",
       calldata: [hex(auctionId), hex(bidHandle)],
     });
-    if (values.length !== 10) {
+    if (values.length !== 11) {
       throw new Error(`unexpected Whisper SealedBid response length: ${values.length}`);
     }
     return {
       auctionId: field(values, 0),
       bidHandle: field(values, 1),
-      noteId: field(values, 3),
-      revealCommitment: field(values, 4),
-      refundCommitment: field(values, 5),
-      winnerCommitment: field(values, 6),
-      funded: boolField("funded", field(values, 8)),
-      settled: boolField("settled", field(values, 9)),
+      groupHandle: field(values, 2),
+      trancheIndex: safeNumber("trancheIndex", field(values, 3)),
+      noteId: field(values, 4),
+      revealCommitment: field(values, 5),
+      refundCommitment: field(values, 6),
+      winnerCommitment: field(values, 7),
+      funded: boolField("funded", field(values, 9)),
+      settled: boolField("settled", field(values, 10)),
     };
   }
 

@@ -27,7 +27,7 @@ export function computeVickreyPrice(
       clearingPrice: 0n,
     };
   }
-  const ranked = [...reveals].sort((left, right) => {
+  const ranked = reveals.filter((reveal) => reveal.amount >= reservePrice).sort((left, right) => {
     if (left.amount !== right.amount) return left.amount > right.amount ? -1 : 1;
     if (left.bidHandle === right.bidHandle) return 0;
     return left.bidHandle < right.bidHandle ? -1 : 1;
@@ -35,7 +35,14 @@ export function computeVickreyPrice(
   for (const [index, reveal] of ranked.entries()) {
     assertPositive(`reveals[${index}].bidHandle`, reveal.bidHandle);
     assertU128(`reveals[${index}].amount`, reveal.amount);
-    if (reveal.amount < reservePrice) throw new Error("accepted bid is below reserve");
+  }
+  if (ranked.length === 0) {
+    return {
+      winnerBidHandle: 0n,
+      winningBid: 0n,
+      secondHighestBid: 0n,
+      clearingPrice: 0n,
+    };
   }
   const winner = ranked[0]!;
   const secondHighestBid = ranked[1]?.amount ?? 0n;

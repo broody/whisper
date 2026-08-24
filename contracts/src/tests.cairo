@@ -4,17 +4,18 @@ use snforge_std::{
 };
 use starknet::{ContractAddress, SyscallResultTrait};
 use crate::hashes::{
-    compute_bid_handle, compute_identity_commitment, compute_operator_identity_commitment,
+    compute_bid_group_handle, compute_bid_handle, compute_operator_identity_commitment,
     compute_reveal_commitment,
 };
 use crate::interface::{
-    IWhisperAuctionDispatcher, IWhisperAuctionDispatcherTrait, IWhisperPrivacyActionDispatcher,
+    IWhisperAuctionDispatcher, IWhisperAuctionDispatcherTrait, IWhisperBidActionDispatcher,
+    IWhisperBidActionDispatcherTrait, IWhisperPrivacyActionDispatcher,
     IWhisperPrivacyActionDispatcherTrait,
 };
 use crate::pricing::compute_vickrey_price;
 use crate::types::{
-    AbortInput, AcceptBidInput, AuctionConfig, AuctionStatus, BidIntent, PrivacyRequest,
-    RevealedBid, SettlementInput,
+    AbortInput, AcceptBidInput, AuctionConfig, AuctionStatus, BidIntent, BidTopUpIntent,
+    PrivacyRequest, RevealedBid, SettlementInput, WalletBidRequest,
 };
 
 const RESERVE_PRICE: u128 = 10;
@@ -66,6 +67,10 @@ fn privacy(auction: IWhisperAuctionDispatcher) -> IWhisperPrivacyActionDispatche
     IWhisperPrivacyActionDispatcher { contract_address: auction.contract_address }
 }
 
+fn wallet_bid(auction: IWhisperAuctionDispatcher) -> IWhisperBidActionDispatcher {
+    IWhisperBidActionDispatcher { contract_address: auction.contract_address }
+}
+
 fn create_auction(auction: IWhisperAuctionDispatcher, token: ContractAddress) -> u64 {
     set_context(auction, 100, creator_address());
     auction.create_auction(config(token))
@@ -76,11 +81,14 @@ fn set_context(auction: IWhisperAuctionDispatcher, timestamp: u64, caller: Contr
     start_cheat_caller_address(auction.contract_address, caller);
 }
 
-fn bid_intent(auction_id: u64, note_id: felt252, amount: u128, salt: felt252) -> BidIntent {
+fn bid_intent(
+    auction_id: u64, bid_nonce: felt252, note_id: felt252, amount: u128, salt: felt252,
+) -> BidIntent {
     let refund_commitment = note_id + 0x1000;
     let winner_commitment = note_id + 0x2000;
     BidIntent {
         auction_id,
+        bid_nonce,
         reveal_commitment: compute_reveal_commitment(
             auction_id, amount, salt, refund_commitment, winner_commitment,
         ),
@@ -92,24 +100,43 @@ fn bid_intent(auction_id: u64, note_id: felt252, amount: u128, salt: felt252) ->
 fn submit_bid(
     auction: IWhisperAuctionDispatcher,
     auction_id: u64,
-    identity_key: felt252,
+    bid_nonce: felt252,
     note_id: felt252,
     amount: u128,
     salt: felt252,
 ) -> felt252 {
-    let intent = bid_intent(auction_id, note_id, amount, salt);
-    let identity_commitment = compute_identity_commitment(identity_key, auction_id);
-    let bid_handle = compute_bid_handle(
-        auction_id,
-        identity_commitment,
-        intent.reveal_commitment,
-        intent.refund_commitment,
-        intent.winner_commitment,
+    let intent = bid_intent(auction_id, bid_nonce, note_id, amount, salt);
+    let group_handle = compute_bid_group_handle(
+        auction_id, bid_nonce, intent.refund_commitment, intent.winner_commitment,
     );
-    set_context(auction, 150, address(0x999));
-    let command = privacy(auction).privacy_compute(identity_key, PrivacyRequest::SubmitBid(intent));
+    let bid_handle = compute_bid_handle(auction_id, group_handle, 0, intent.reveal_commitment);
     set_context(auction, 150, pool_address());
-    privacy(auction).privacy_invoke_with_computation(command);
+    wallet_bid(auction).privacy_invoke(WalletBidRequest::SubmitBid(intent));
+    bid_handle
+}
+
+fn add_bid_tranche(
+    auction: IWhisperAuctionDispatcher,
+    auction_id: u64,
+    group_handle: felt252,
+    note_id: felt252,
+    amount: u128,
+    salt: felt252,
+) -> felt252 {
+    let group = auction.get_bid_group(auction_id, group_handle);
+    let reveal_commitment = compute_reveal_commitment(
+        auction_id, amount, salt, group.refund_commitment, group.winner_commitment,
+    );
+    let bid_handle = compute_bid_handle(
+        auction_id, group_handle, group.tranche_count, reveal_commitment,
+    );
+    set_context(auction, 150, pool_address());
+    wallet_bid(auction)
+        .privacy_invoke(
+            WalletBidRequest::AddBidTranche(
+                BidTopUpIntent { auction_id, group_handle, reveal_commitment },
+            ),
+        );
     bid_handle
 }
 
@@ -215,30 +242,25 @@ fn tied_bid_uses_smallest_handle_and_pays_tied_amount() {
 }
 
 #[test]
-fn derives_pool_identity_and_bid_transcript() {
+fn derives_wallet_bid_group_and_tranche_transcript() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
-    let identity_key = 0xabc;
-    let intent = bid_intent(auction_id, 0x704, 30, 0x705);
-    let command = privacy(auction).privacy_compute(identity_key, PrivacyRequest::SubmitBid(intent));
-    match command {
-        crate::types::PrivacyCommand::SubmitBid(bid) => {
-            let expected_identity = compute_identity_commitment(identity_key, auction_id);
-            assert_eq!(bid.identity_commitment, expected_identity);
-            assert_eq!(bid.reveal_commitment, intent.reveal_commitment);
-        },
-        _ => panic!("WRONG_COMMAND"),
-    }
+    let intent = bid_intent(auction_id, 0xabc, 0x704, 30, 0x705);
+    let expected_group = compute_bid_group_handle(
+        auction_id, intent.bid_nonce, intent.refund_commitment, intent.winner_commitment,
+    );
+    let expected_bid = compute_bid_handle(auction_id, expected_group, 0, intent.reveal_commitment);
+    set_context(auction, 150, pool_address());
+    wallet_bid(auction).privacy_invoke(WalletBidRequest::SubmitBid(intent));
+    assert_eq!(auction.get_bid(auction_id, expected_bid).group_handle, expected_group);
 }
 
 #[test]
 fn matches_canonical_typescript_bid_transcript_vector() {
-    let identity_commitment = compute_identity_commitment(0xabc, 1);
-    let bid_handle = compute_bid_handle(1, identity_commitment, 0x701, 0x702, 0x703);
-    assert_eq!(
-        identity_commitment, 0x388934032e394e858e5fd474159ead3a6dd48d0419c2a4b9ffa38c353b72ef1,
-    );
-    assert_eq!(bid_handle, 0x11c9d1b216ef5e67b87296fe6d25da64c546d2d1a95af2de7a56e37a7abaf5b);
+    let group_handle = compute_bid_group_handle(1, 0xabc, 0x702, 0x703);
+    let bid_handle = compute_bid_handle(1, group_handle, 0, 0x701);
+    assert_eq!(group_handle, 0xe8fdc2a31cc7c303e4a77bd5656145cd299cfeef0dbb110ef69b2f4daf123f);
+    assert_eq!(bid_handle, 0x56fe80448dce869e7b460dd35c343d5018dd0b0a085bc5ff8aaa2bc6abd64f);
 }
 
 #[test]
@@ -254,12 +276,7 @@ fn matches_typescript_operator_and_reveal_vectors() {
 }
 
 #[test]
-fn scopes_pool_identity_commitments_to_each_auction() {
-    assert!(compute_identity_commitment(0xabc, 1) != compute_identity_commitment(0xabc, 2));
-}
-
-#[test]
-fn pool_compute_and_invoke_submits_unfunded_bid() {
+fn wallet_invoke_submits_unfunded_bid() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
     let bid_handle = submit_bid(auction, auction_id, 0xabc, 0x704, 30, 0x705);
@@ -322,12 +339,13 @@ fn settles_operator_accepted_vickrey_result() {
         RevealedBid { bid_handle: second, amount: 30, salt: 0x802 },
         RevealedBid { bid_handle: third, amount: 22, salt: 0x803 },
     ];
-    settle(auction, auction_id, revealed.span(), second);
+    let winner_group = auction.get_bid(auction_id, second).group_handle;
+    settle(auction, auction_id, revealed.span(), winner_group);
 
     let state = auction.get_auction(auction_id);
     let result = auction.get_result(auction_id);
     assert_eq!(state.status, AuctionStatus::Settled);
-    assert_eq!(result.winner_bid_handle, second);
+    assert_eq!(result.winner_bid_handle, winner_group);
     assert_eq!(result.winning_bid, 30);
     assert_eq!(result.second_highest_bid, 22);
     assert_eq!(result.clearing_price, 22);
@@ -343,7 +361,7 @@ fn accepts_bid_without_configured_ceiling() {
     let amount: u128 = 1_000_000_000_000_000_000_000_000;
     let handle = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, amount, 0x801);
     let revealed = array![RevealedBid { bid_handle: handle, amount, salt: 0x801 }];
-    settle(auction, auction_id, revealed.span(), handle);
+    settle(auction, auction_id, revealed.span(), auction.get_bid(auction_id, handle).group_handle);
     let result = auction.get_result(auction_id);
     assert_eq!(result.winning_bid, amount);
     assert_eq!(result.clearing_price, RESERVE_PRICE);
@@ -379,21 +397,46 @@ fn operator_aborts_after_timeout() {
 fn rejects_privacy_invoke_not_authenticated_by_pool() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
-    let command = privacy(auction)
-        .privacy_compute(
-            0xabc, PrivacyRequest::SubmitBid(bid_intent(auction_id, 0x704, 30, 0x705)),
-        );
     set_context(auction, 150, address(0x999));
-    privacy(auction).privacy_invoke_with_computation(command);
+    wallet_bid(auction)
+        .privacy_invoke(
+            WalletBidRequest::SubmitBid(bid_intent(auction_id, 0xabc, 0x704, 30, 0x705)),
+        );
 }
 
 #[test]
-#[should_panic]
-fn rejects_duplicate_private_identity() {
+fn accepts_additive_bid_tranche() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
-    submit_bid(auction, auction_id, 0xabc, 0x704, 30, 0x705);
-    submit_bid(auction, auction_id, 0xabc, 0x706, 31, 0x707);
+    let first = submit_bid(auction, auction_id, 0xabc, 0x704, 50, 0x705);
+    let group_handle = auction.get_bid(auction_id, first).group_handle;
+    let second = add_bid_tranche(auction, auction_id, group_handle, 0x706, 30, 0x707);
+    accept_bid(auction, auction_id, first, 0x704);
+    accept_bid(auction, auction_id, second, 0x706);
+    assert_eq!(auction.get_bid_group(auction_id, group_handle).funded_tranche_count, 2);
+}
+
+#[test]
+fn aggregates_tranches_before_vickrey_pricing() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let first = submit_bid(auction, auction_id, 0xabc, 0x704, 50, 0x705);
+    let group_handle = auction.get_bid(auction_id, first).group_handle;
+    let top_up = add_bid_tranche(auction, auction_id, group_handle, 0x706, 30, 0x707);
+    let competitor = submit_bid(auction, auction_id, 0xdef, 0x708, 60, 0x709);
+    accept_bid(auction, auction_id, first, 0x704);
+    accept_bid(auction, auction_id, top_up, 0x706);
+    accept_bid(auction, auction_id, competitor, 0x708);
+    let revealed = array![
+        RevealedBid { bid_handle: first, amount: 50, salt: 0x705 },
+        RevealedBid { bid_handle: top_up, amount: 30, salt: 0x707 },
+        RevealedBid { bid_handle: competitor, amount: 60, salt: 0x709 },
+    ];
+    settle(auction, auction_id, revealed.span(), group_handle);
+    let result = auction.get_result(auction_id);
+    assert_eq!(result.winning_bid, 80);
+    assert_eq!(result.second_highest_bid, 60);
+    assert_eq!(result.clearing_price, 60);
 }
 
 #[test]
@@ -461,25 +504,28 @@ fn rejects_incomplete_force_reveal_batch() {
 fn rejects_wrong_vickrey_winner() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
-    let first = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, 20, 0x801);
-    let second = submit_and_accept_bid(auction, auction_id, 0xa2, 0x702, 30, 0x802);
+    let first = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, 70, 0x801);
+    let second = submit_and_accept_bid(auction, auction_id, 0xa2, 0x702, 80, 0x802);
     let revealed = array![
-        RevealedBid { bid_handle: first, amount: 20, salt: 0x801 },
-        RevealedBid { bid_handle: second, amount: 30, salt: 0x802 },
+        RevealedBid { bid_handle: first, amount: 70, salt: 0x801 },
+        RevealedBid { bid_handle: second, amount: 80, salt: 0x802 },
     ];
     settle(auction, auction_id, revealed.span(), first);
 }
 
 #[test]
-#[should_panic]
-fn rejects_revealed_amount_below_reserve() {
+fn refunds_group_below_reserve_without_a_winner() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
     let handle = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, RESERVE_PRICE - 1, 0x801);
     let revealed = array![
         RevealedBid { bid_handle: handle, amount: RESERVE_PRICE - 1, salt: 0x801 },
     ];
-    settle(auction, auction_id, revealed.span(), handle);
+    settle(auction, auction_id, revealed.span(), 0);
+    let result = auction.get_result(auction_id);
+    assert!(!result.has_winner);
+    assert_eq!(result.winner_bid_handle, 0);
+    assert_eq!(result.clearing_price, 0);
 }
 
 #[test]
