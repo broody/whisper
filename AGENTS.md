@@ -34,6 +34,18 @@ Also run `jq empty deployments/sepolia.json` and `git diff --check` from the rep
 
 Do not commit, push, deploy, create accounts, fund accounts, approve tokens, or send transactions unless the user explicitly requests that action. Sepolia authorization does not imply mainnet authorization.
 
+## Commit messages
+
+Use Conventional Commits for every commit:
+
+```text
+<type>: <imperative summary>
+```
+
+Allowed types are `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, and `chore`. Use `feat` for user-visible capabilities, `fix` for defects, and `docs` for documentation-only changes. Keep the summary lowercase, imperative, specific, at most 72 characters, and without a trailing period. Do not use title case or bare sentence-style subjects such as `Add ...` or `Implement ...`.
+
+Use a scope only when it materially improves clarity, for example `fix(operator): rotate replay notes safely`. Mark breaking changes with `!` and include a `BREAKING CHANGE:` footer. Keep one logical change per commit; if several packages implement one feature, use the feature-level subject rather than listing packages.
+
 ## Secret and account handling
 
 Disposable Sepolia account and operator material is stored outside the repository:
