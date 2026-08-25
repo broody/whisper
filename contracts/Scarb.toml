@@ -1,6 +1,6 @@
 [package]
 name = "whisper"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024_07"
 license = "Apache-2.0"
 description = "Whisper private Vickrey auctions for any STRK20-supported ERC-20"
@@ -10,6 +10,8 @@ homepage = "https://whisper.trade"
 sierra-replace-ids = true
 
 [dependencies]
+openzeppelin_access = "3.0.0"
+openzeppelin_upgrades = "3.0.0"
 starknet = "2.13.1"
 
 [[target.starknet-contract]]

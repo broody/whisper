@@ -2,13 +2,17 @@
 pub mod WhisperAuction {
     use core::dict::{Felt252Dict, Felt252DictTrait};
     use core::hash::HashStateTrait;
-    use core::num::traits::Zero;
+    use core::num::traits::{CheckedAdd, Zero};
     use core::poseidon::PoseidonTrait;
+    use openzeppelin_access::ownable::OwnableComponent;
+    use openzeppelin_upgrades::UpgradeableComponent;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_block_timestamp, get_caller_address, get_contract_address};
+    use starknet::{
+        ClassHash, ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
+    };
     use crate::asset_hashes::{ASSET_WINNER_DOMAIN, compute_asset_winner_commitment};
     use crate::asset_interface::{
         IERC1155AssetDispatcher, IERC1155AssetDispatcherTrait, IERC1155Receiver,
@@ -20,13 +24,23 @@ pub mod WhisperAuction {
         compute_bid_group_handle, compute_bid_handle, compute_operator_identity_commitment,
         compute_reveal_commitment,
     };
-    use crate::interface::{IWhisperAuction, IWhisperBidAction, IWhisperPrivacyAction};
+    use crate::interface::{
+        IWhisperAuction, IWhisperBidAction, IWhisperPrivacyAction, IWhisperUpgradeable,
+    };
     use crate::pricing::compute_vickrey_price;
     use crate::types::{
         AbortInput, AcceptBidInput, Auction, AuctionConfig, AuctionResult, AuctionStatus, BidGroup,
         BidIntent, BidSubmission, BidTopUpIntent, OpenNoteDeposit, PrivacyCommand, PrivacyRequest,
         RevealedBid, SealedBid, SettlementInput, WalletBidRequest,
     };
+
+    component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
+    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
+
+    #[abi(embed_v0)]
+    impl OwnableImpl = OwnableComponent::OwnableTwoStepImpl<ContractState>;
+    impl OwnableInternalImpl = OwnableComponent::InternalImpl<ContractState>;
+    impl UpgradeableInternalImpl = UpgradeableComponent::InternalImpl<ContractState>;
 
     const ACCEPTED_BIDS_DOMAIN: felt252 = 'WHISPER_BIDS_V1';
     const IERC721_RECEIVER_ID: felt252 =
@@ -51,6 +65,10 @@ pub mod WhisperAuction {
         pending_seller: ContractAddress,
         pending_token_id: u256,
         pending_amount: u256,
+        #[substorage(v0)]
+        ownable: OwnableComponent::Storage,
+        #[substorage(v0)]
+        upgradeable: UpgradeableComponent::Storage,
     }
 
     #[event]
@@ -64,6 +82,10 @@ pub mod WhisperAuction {
         AuctionAborted: AuctionAborted,
         AssetClaimed: AssetClaimed,
         AssetReclaimed: AssetReclaimed,
+        #[flat]
+        OwnableEvent: OwnableComponent::Event,
+        #[flat]
+        UpgradeableEvent: UpgradeableComponent::Event,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -158,10 +180,19 @@ pub mod WhisperAuction {
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, pool_address: ContractAddress) {
+    fn constructor(ref self: ContractState, pool_address: ContractAddress, owner: ContractAddress) {
         assert!(!pool_address.is_zero(), "ZERO_POOL");
         self.pool_address.write(pool_address);
         self.next_auction_id.write(1);
+        self.ownable.initializer(owner);
+    }
+
+    #[abi(embed_v0)]
+    impl UpgradeableImpl of IWhisperUpgradeable<ContractState> {
+        fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self.ownable.assert_only_owner();
+            self.upgradeable.upgrade(new_class_hash);
+        }
     }
 
     #[abi(embed_v0)]
@@ -840,7 +871,10 @@ pub mod WhisperAuction {
                         .reveal_commitment,
                     "INVALID_REVEAL",
                 );
-                let total = group_totals.get(bid.group_handle) + revealed.amount;
+                let total = group_totals
+                    .get(bid.group_handle)
+                    .checked_add(revealed.amount)
+                    .expect('BID_TOTAL_OVERFLOW');
                 group_totals.insert(bid.group_handle, total);
                 if !seen_groups.get(bid.group_handle) {
                     seen_groups.insert(bid.group_handle, true);

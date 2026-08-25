@@ -1,4 +1,4 @@
-use starknet::ContractAddress;
+use starknet::{ClassHash, ContractAddress};
 use crate::types::{
     Auction, AuctionConfig, AuctionResult, BidGroup, OpenNoteDeposit, PrivacyCommand,
     PrivacyRequest, SealedBid, WalletBidRequest,
@@ -22,6 +22,22 @@ pub trait IWhisperAuction<TContractState> {
     fn get_bid(self: @TContractState, auction_id: u64, bid_handle: felt252) -> SealedBid;
     fn get_bid_handle(self: @TContractState, auction_id: u64, index: u32) -> felt252;
     fn get_result(self: @TContractState, auction_id: u64) -> AuctionResult;
+}
+
+/// Administrative surface implemented with OpenZeppelin's Ownable component.
+#[starknet::interface]
+pub trait IWhisperOwnable<TContractState> {
+    fn owner(self: @TContractState) -> ContractAddress;
+    fn pending_owner(self: @TContractState) -> ContractAddress;
+    fn accept_ownership(ref self: TContractState);
+    fn transfer_ownership(ref self: TContractState, new_owner: ContractAddress);
+    fn renounce_ownership(ref self: TContractState);
+}
+
+/// Class replacement guarded by the OpenZeppelin Ownable component.
+#[starknet::interface]
+pub trait IWhisperUpgradeable<TContractState> {
+    fn upgrade(ref self: TContractState, new_class_hash: ClassHash);
 }
 
 /// Wallet API-compatible STRK20 `Invoke` target implemented by Whisper.

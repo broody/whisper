@@ -3,7 +3,7 @@
 The `whisper` Scarb package exports:
 
 - `WhisperAuction`, the deployable reference contract.
-- `IWhisperAuction`, `IWhisperBidAction`, `IWhisperPrivacyAction`, and ABI dispatchers.
+- `IWhisperAuction`, `IWhisperBidAction`, `IWhisperPrivacyAction`, `IWhisperOwnable`, `IWhisperUpgradeable`, and ABI dispatchers.
 - Standard token/receiver interfaces and fulfillment types.
 - Generic auction, bid, settlement, result, and status types.
 - Canonical bid-group, tranche, operator, and reveal hashes.
@@ -17,6 +17,8 @@ whisper = { path = "../whisper/contracts" }
 ```
 
 One `payment_token` is snapshotted per auction. It may be any ERC-20 supported by the configured STRK20 pool.
+
+`WhisperAuction` embeds OpenZeppelin's `UpgradeableComponent` and two-step `OwnableComponent`. Its constructor requires both the canonical pool address and an explicit nonzero owner; only that owner may replace the class hash. Ownership transfers require the proposed owner to accept before upgrade authority changes.
 
 ## Fulfillment
 

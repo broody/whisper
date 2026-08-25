@@ -30,7 +30,8 @@ vectors/    Cross-language transcript fixtures
 - accepted note ID uniqueness and ordered bid-set commitment;
 - commitment-opening verification;
 - additive tranche aggregation, combined group refunds/change, deterministic Vickrey pricing and tie-breaking; and
-- terminal settlement and abort state; and
+- terminal settlement and abort state;
+- OpenZeppelin upgradeability guarded by two-step ownership; and
 - unified offchain/ERC-20/ERC-721/ERC-1155 fulfillment with committed winner claims and terminal returns.
 
 ### TypeScript SDK
@@ -61,7 +62,7 @@ vectors/    Cross-language transcript fixtures
 ## Current local verification
 
 ```text
-Cairo contract tests   30 passing
+Cairo contract tests   63 passing
 Headless SDK tests     13 passing
 Operator tests         19 passing
 ```
@@ -85,7 +86,9 @@ Do not commit `.npmrc` or send the token to another service. The repository igno
 
 ## Live Sepolia status
 
-The repository records the disposable vault, relayer, active v0.3 Whisper deployment, prior deployments, and successful smoke transactions in `deployments/sepolia.json`. Auction 1 used explicit offchain fulfillment and completed private bid submission, discovery, replay-protected acceptance, and settlement; the Stake Wars Go reader decoded the live 28-felt auction ABI and settled result. Auction 2 escrowed exactly 0.01 STRK through ERC-20 fulfillment and returned it to the seller after timeout, ending in `Reclaimed`. The bidder smoke used the official SDK to build and prove the same standard transfer + invoke operation exposed through the Wallet API; it did not exercise Ready's interactive browser method.
+The repository records the disposable vault, relayer, active v0.4 Whisper deployment, prior deployments, and successful smoke transactions in `deployments/sepolia.json`. The active contract was declared with `sncast` and uniquely deployed through Starknet's Universal Deployer Contract. It embeds OpenZeppelin upgradeability and two-step ownership, with the disposable relayer as the current upgrade owner. Auction 2 completed private bid submission, discovery, replay-protected acceptance, and settlement. The bidder smoke used the official SDK to build and prove the same standard transfer + invoke operation exposed through the Wallet API; it did not exercise Ready's interactive browser method.
+
+The first v0.4 smoke auction intentionally remained unfunded after transaction-scoped discovery found two notes matching the committed amount. The operator rejected the ambiguous match instead of guessing a note ID. The successful retry selected an exact-value input, produced one transaction-scoped amount match, and then completed the lifecycle. The previous v0.3 deployment's offchain settlement, Stake Wars reader verification, and ERC-20 escrow/reclaim smoke remain preserved as historical evidence in the deployment metadata.
 
 Two operational requirements were confirmed live. First, the relayer submitting an outside-execution proof must approve the pool to collect its public privacy fee. Second, a callback-only operator proof is rejected by the pool as `NO_REPLAY_PROTECTION`. Acceptance succeeded when the same batch consumed and reissued a separate vault-owned note, creating a nullifier while leaving the escrowed bid note untouched. After the force-reveal deadline, settlement consumed the accepted 0.2 STRK note and privately reissued 0.1 STRK of winner change plus 0.1 STRK of seller proceeds. Production automation needs relayer fee monitoring plus a durable replay-note inventory and rotation policy.
 

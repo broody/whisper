@@ -248,3 +248,34 @@ pub mod MockERC1155 {
         }
     }
 }
+
+#[starknet::interface]
+pub trait IMockWhisperUpgradeV2<TContractState> {
+    fn get_pool_address(self: @TContractState) -> ContractAddress;
+    fn version(self: @TContractState) -> u32;
+}
+
+/// Test-only replacement class with the same `pool_address` storage slot as
+/// `WhisperAuction`. It proves both class replacement and state preservation.
+#[starknet::contract]
+pub mod MockWhisperUpgradeV2 {
+    use starknet::ContractAddress;
+    use starknet::storage::StoragePointerReadAccess;
+    use crate::test_tokens::IMockWhisperUpgradeV2;
+
+    #[storage]
+    struct Storage {
+        pool_address: ContractAddress,
+    }
+
+    #[abi(embed_v0)]
+    impl UpgradeV2Impl of IMockWhisperUpgradeV2<ContractState> {
+        fn get_pool_address(self: @ContractState) -> ContractAddress {
+            self.pool_address.read()
+        }
+
+        fn version(self: @ContractState) -> u32 {
+            2
+        }
+    }
+}

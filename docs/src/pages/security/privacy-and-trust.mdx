@@ -70,6 +70,8 @@ It does not hold or decrypt the notes.
 
 The bidder and operator use different proving boundaries. A compatible wallet proves bidder `transfer` + `invoke` actions without exposing the user's viewing key to the dapp or Whisper backend. The operator's proving service receives only vault-owned acceptance and settlement work; moving bidder submission to the Wallet API does not remove the operator prover requirement.
 
+The deployed v0.4 contract is upgradeable. The two-step owner can replace its class hash and therefore change any of these contract guarantees for future calls. Two-step transfer prevents authority from moving to an unintended address without acceptance, but it does not constrain what an accepted owner may upgrade to. Production ownership should use independently reviewed governance or a timelocked multisig, and every proposed class should be reviewed for storage compatibility and behavior before execution.
+
 ## What bidders trust the operator to do
 
 The operator controls the privacy account that owns every escrow note. Bidders therefore trust it to:
@@ -101,6 +103,7 @@ It does not verify that the private proceeds note was actually created for the s
 | Operator misses the settlement window | Auction can be marked aborted; funds still require operator refunds |
 | Operator loses the viewing/signing key | Vault notes may become unrecoverable |
 | Operator redirects or withholds outputs | Pool value still balances, but bidders are harmed |
+| Upgrade owner installs malicious or incompatible code | Contract guarantees or stored auction state may be changed or broken |
 
 There is no bidder-side permissionless reclaim in this version.
 

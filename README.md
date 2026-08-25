@@ -71,7 +71,7 @@ A normal dapp must never handle a user's viewing key, notes, or proofs. It passe
 
 ## Sepolia deployment
 
-The current experimental Sepolia v0.3 instance is deployed at [`0x03db…b586`](https://sepolia.voyager.online/contract/0x03db9a75d8f90384e300b32bc4f08e3ac273325fbd18d0ef037a31795cfbb586) against the canonical Sepolia STRK20 pool. An explicit offchain Stake Wars auction completed the standard transfer + invoke private-note discovery, acceptance, force-reveal, and proof-backed settlement lifecycle using the official Privacy SDK. A second auction escrowed exactly 0.01 STRK through the unified ERC-20 fulfillment path and returned it to the seller after timeout. Public deployment metadata and prior deployments are recorded in [`deployments/sepolia.json`](deployments/sepolia.json); signing, viewing, claim, and reveal secrets remain outside the repository.
+The current experimental Sepolia v0.4 instance is deployed through the Universal Deployer Contract at [`0x02d8…e9a4`](https://sepolia.voyager.online/contract/0x02d8bf2eb33e236b97bf61ad4b74e2b442ce6a0e25995eb9754cc5eb9dabe9a4) against the canonical Sepolia STRK20 pool. It uses OpenZeppelin's upgradeable component behind two-step ownable access control. Auction 2 completed the standard transfer + invoke private-note discovery, replay-protected acceptance, force-reveal, and proof-backed settlement lifecycle using the official Privacy SDK. Public deployment metadata, transaction hashes, and prior deployments are recorded in [`deployments/sepolia.json`](deployments/sepolia.json); signing, viewing, claim, and reveal secrets remain outside the repository.
 
 ## Develop
 

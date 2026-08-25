@@ -2,7 +2,7 @@ use snforge_std::{
     CheatSpan, ContractClassTrait, DeclareResultTrait, cheat_caller_address, declare,
     start_cheat_block_timestamp, start_cheat_caller_address, stop_cheat_caller_address,
 };
-use starknet::{ContractAddress, SyscallResultTrait};
+use starknet::{ClassHash, ContractAddress, SyscallResultTrait};
 use crate::asset_hashes::{ASSET_WINNER_DOMAIN, compute_asset_winner_commitment};
 use crate::asset_interface::{
     IERC1155AssetDispatcher, IERC1155AssetDispatcherTrait, IERC20AssetDispatcher,
@@ -15,14 +15,16 @@ use crate::hashes::{
 };
 use crate::interface::{
     IWhisperAuctionDispatcher, IWhisperAuctionDispatcherTrait, IWhisperBidActionDispatcher,
-    IWhisperBidActionDispatcherTrait, IWhisperPrivacyActionDispatcher,
-    IWhisperPrivacyActionDispatcherTrait,
+    IWhisperBidActionDispatcherTrait, IWhisperOwnableDispatcher, IWhisperOwnableDispatcherTrait,
+    IWhisperPrivacyActionDispatcher, IWhisperPrivacyActionDispatcherTrait,
+    IWhisperUpgradeableDispatcher, IWhisperUpgradeableDispatcherTrait,
 };
 use crate::pricing::compute_vickrey_price;
 use crate::test_tokens::{
     IMockERC1155ControlDispatcher, IMockERC1155ControlDispatcherTrait, IMockERC20ControlDispatcher,
     IMockERC20ControlDispatcherTrait, IMockERC721ControlDispatcher,
-    IMockERC721ControlDispatcherTrait,
+    IMockERC721ControlDispatcherTrait, IMockWhisperUpgradeV2Dispatcher,
+    IMockWhisperUpgradeV2DispatcherTrait,
 };
 use crate::types::{
     AbortInput, AcceptBidInput, AuctionConfig, AuctionStatus, BidIntent, BidTopUpIntent,
@@ -34,6 +36,7 @@ const BID_DEADLINE: u64 = 200;
 const REVEAL_AFTER: u64 = 220;
 const ABORT_AFTER: u64 = 300;
 const OPERATOR_IDENTITY_KEY: felt252 = 0x444;
+const MAX_U128: u128 = 0xffffffffffffffffffffffffffffffff;
 
 fn address(value: felt252) -> ContractAddress {
     value.try_into().unwrap()
@@ -45,6 +48,10 @@ fn pool_address() -> ContractAddress {
 
 fn creator_address() -> ContractAddress {
     address(0x200)
+}
+
+fn owner_address() -> ContractAddress {
+    address(0x900)
 }
 
 fn config(token: ContractAddress) -> AuctionConfig {
@@ -68,13 +75,26 @@ fn config(token: ContractAddress) -> AuctionConfig {
     }
 }
 
-fn deploy() -> IWhisperAuctionDispatcher {
+fn deploy_with_owner(owner: ContractAddress) -> IWhisperAuctionDispatcher {
     let pool = pool_address();
     let mut calldata = array![];
     pool.serialize(ref calldata);
+    owner.serialize(ref calldata);
     let contract_class = declare("WhisperAuction").unwrap();
     let (contract_address, _) = contract_class.contract_class().deploy(@calldata).unwrap_syscall();
     IWhisperAuctionDispatcher { contract_address }
+}
+
+fn deploy() -> IWhisperAuctionDispatcher {
+    deploy_with_owner(owner_address())
+}
+
+fn ownable(auction: IWhisperAuctionDispatcher) -> IWhisperOwnableDispatcher {
+    IWhisperOwnableDispatcher { contract_address: auction.contract_address }
+}
+
+fn upgradeable(auction: IWhisperAuctionDispatcher) -> IWhisperUpgradeableDispatcher {
+    IWhisperUpgradeableDispatcher { contract_address: auction.contract_address }
 }
 
 fn privacy(auction: IWhisperAuctionDispatcher) -> IWhisperPrivacyActionDispatcher {
@@ -218,6 +238,8 @@ fn settle(
 }
 
 #[test]
+// Baseline: ~37,910 L2 gas on Scarb 2.13.1 / snforge 0.60.0.
+#[available_gas(l2_gas: 50_000)]
 fn computes_second_price_and_private_change_amount() {
     let bids = array![
         RevealedBid { bid_handle: 11, amount: 14, salt: 1 },
@@ -290,6 +312,101 @@ fn matches_typescript_operator_and_reveal_vectors() {
 }
 
 #[test]
+// Baseline: ~1,779,910 L2 gas and ~384 L1 data gas.
+#[available_gas(l1_data_gas: 500, l2_gas: 2_200_000)]
+fn constructor_sets_explicit_upgrade_owner() {
+    let auction = deploy();
+    assert_eq!(ownable(auction).owner(), owner_address());
+}
+
+#[test]
+#[should_panic(expected: 'New owner is the zero address')]
+fn rejects_zero_upgrade_owner() {
+    deploy_with_owner(address(0));
+}
+
+#[test]
+#[should_panic(expected: 'Caller is not the owner')]
+fn rejects_upgrade_from_non_owner() {
+    let auction = deploy();
+    let replacement = declare("MockWhisperUpgradeV2").unwrap().contract_class();
+    start_cheat_caller_address(auction.contract_address, address(0x901));
+    upgradeable(auction).upgrade(*replacement.class_hash);
+}
+
+#[test]
+#[should_panic(expected: 'Class hash cannot be zero')]
+fn rejects_zero_upgrade_class_hash() {
+    let auction = deploy();
+    let zero_class_hash: ClassHash = 0.try_into().unwrap();
+    start_cheat_caller_address(auction.contract_address, owner_address());
+    upgradeable(auction).upgrade(zero_class_hash);
+}
+
+#[test]
+// Baseline: ~2,140,220 L2 gas and ~384 L1 data gas.
+#[available_gas(l1_data_gas: 500, l2_gas: 2_600_000)]
+fn owner_can_upgrade_and_preserve_existing_storage() {
+    let auction = deploy();
+    let replacement = declare("MockWhisperUpgradeV2").unwrap().contract_class();
+    start_cheat_caller_address(auction.contract_address, owner_address());
+    upgradeable(auction).upgrade(*replacement.class_hash);
+
+    let upgraded = IMockWhisperUpgradeV2Dispatcher { contract_address: auction.contract_address };
+    assert_eq!(upgraded.get_pool_address(), pool_address());
+    assert_eq!(upgraded.version(), 2);
+}
+
+#[test]
+// Baseline: ~3,104,230 L2 gas and ~384 L1 data gas.
+#[available_gas(l1_data_gas: 500, l2_gas: 3_800_000)]
+fn transferred_owner_controls_future_upgrades() {
+    let auction = deploy();
+    let new_owner = address(0x902);
+    start_cheat_caller_address(auction.contract_address, owner_address());
+    ownable(auction).transfer_ownership(new_owner);
+    assert_eq!(ownable(auction).owner(), owner_address());
+    assert_eq!(ownable(auction).pending_owner(), new_owner);
+
+    start_cheat_caller_address(auction.contract_address, new_owner);
+    ownable(auction).accept_ownership();
+    assert_eq!(ownable(auction).owner(), new_owner);
+    assert_eq!(ownable(auction).pending_owner(), address(0));
+
+    let replacement = declare("MockWhisperUpgradeV2").unwrap().contract_class();
+    upgradeable(auction).upgrade(*replacement.class_hash);
+    assert_eq!(
+        IMockWhisperUpgradeV2Dispatcher { contract_address: auction.contract_address }.version(), 2,
+    );
+}
+
+#[test]
+#[should_panic(expected: 'Caller is not the owner')]
+fn pending_owner_cannot_upgrade_before_acceptance() {
+    let auction = deploy();
+    let pending_owner = address(0x902);
+    start_cheat_caller_address(auction.contract_address, owner_address());
+    ownable(auction).transfer_ownership(pending_owner);
+
+    let replacement = declare("MockWhisperUpgradeV2").unwrap().contract_class();
+    start_cheat_caller_address(auction.contract_address, pending_owner);
+    upgradeable(auction).upgrade(*replacement.class_hash);
+}
+
+#[test]
+#[should_panic(expected: 'Caller is not the pending owner')]
+fn third_party_cannot_accept_ownership() {
+    let auction = deploy();
+    start_cheat_caller_address(auction.contract_address, owner_address());
+    ownable(auction).transfer_ownership(address(0x902));
+
+    start_cheat_caller_address(auction.contract_address, address(0x903));
+    ownable(auction).accept_ownership();
+}
+
+#[test]
+// Baseline: ~21,037,630 L2 gas and ~3,264 L1 data gas.
+#[available_gas(l1_data_gas: 4_000, l2_gas: 25_000_000)]
 fn wallet_invoke_submits_unfunded_bid() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -302,6 +419,8 @@ fn wallet_invoke_submits_unfunded_bid() {
 }
 
 #[test]
+// Baseline: ~28,594,414 L2 gas and ~3,840 L1 data gas.
+#[available_gas(l1_data_gas: 4_500, l2_gas: 34_000_000)]
 fn operator_accepts_discovered_vault_note() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -324,7 +443,7 @@ fn operator_accepts_during_post_bid_grace_period() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "ACCEPTANCE_CLOSED")]
 fn rejects_acceptance_when_force_reveal_window_opens() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -342,6 +461,101 @@ fn supports_different_payment_tokens_per_auction() {
 }
 
 #[test]
+#[should_panic(expected: "MAX_BIDS_TOO_HIGH")]
+fn rejects_auction_capacity_above_supported_limit() {
+    let auction = deploy();
+    let mut invalid = config(address(0x501));
+    invalid.max_bids = 257;
+    set_context(auction, 100, creator_address());
+    auction.create_auction(invalid);
+}
+
+#[test]
+#[should_panic(expected: "INVALID_REVEAL_TIME")]
+fn rejects_auction_without_post_bid_grace_period() {
+    let auction = deploy();
+    let mut invalid = config(address(0x501));
+    invalid.force_reveal_after = invalid.bidding_deadline;
+    set_context(auction, 100, creator_address());
+    auction.create_auction(invalid);
+}
+
+#[test]
+#[should_panic(expected: "BIDDING_CLOSED")]
+fn rejects_bid_at_bidding_deadline() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    set_context(auction, BID_DEADLINE, pool_address());
+    wallet_bid(auction)
+        .privacy_invoke(
+            WalletBidRequest::SubmitBid(bid_intent(auction_id, 0xabc, 0x704, 30, 0x705)),
+        );
+}
+
+#[test]
+#[should_panic(expected: "DUPLICATE_BID_GROUP")]
+fn rejects_duplicate_bid_group() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let intent = bid_intent(auction_id, 0xabc, 0x704, 30, 0x705);
+    set_context(auction, 150, pool_address());
+    wallet_bid(auction).privacy_invoke(WalletBidRequest::SubmitBid(intent));
+    wallet_bid(auction).privacy_invoke(WalletBidRequest::SubmitBid(intent));
+}
+
+#[test]
+#[should_panic(expected: "BID_ALREADY_FUNDED")]
+fn rejects_funding_same_bid_twice() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let bid_handle = submit_bid(auction, auction_id, 0xabc, 0x704, 30, 0x705);
+    accept_bid(auction, auction_id, bid_handle, 0x704);
+    accept_bid(auction, auction_id, bid_handle, 0x706);
+}
+
+#[test]
+#[should_panic(expected: "MAX_BIDS_REACHED")]
+fn enforces_accepted_tranche_capacity() {
+    let auction = deploy();
+    let mut limited = config(address(0x501));
+    limited.max_bids = 1;
+    set_context(auction, 100, creator_address());
+    let auction_id = auction.create_auction(limited);
+    let first = submit_bid(auction, auction_id, 0xa1, 0x701, 20, 0x801);
+    let second = submit_bid(auction, auction_id, 0xa2, 0x702, 30, 0x802);
+    accept_bid(auction, auction_id, first, 0x701);
+    accept_bid(auction, auction_id, second, 0x702);
+}
+
+#[test]
+#[should_panic(expected: "DUPLICATE_NOTE_ID")]
+fn rejects_note_reuse_across_auctions() {
+    let auction = deploy();
+    let first_auction = create_auction(auction, address(0x501));
+    let second_auction = create_auction(auction, address(0x501));
+    let first = submit_bid(auction, first_auction, 0xa1, 0x701, 20, 0x801);
+    let second = submit_bid(auction, second_auction, 0xa2, 0x702, 30, 0x802);
+    accept_bid(auction, first_auction, first, 0x900);
+    accept_bid(auction, second_auction, second, 0x900);
+}
+
+#[test]
+#[should_panic(expected: "ONLY_POOL")]
+fn rejects_computed_command_not_forwarded_by_pool() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    set_context(auction, ABORT_AFTER, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Abort(AbortInput { auction_id, recovery_hash: 0xa01 }),
+        );
+    privacy(auction).privacy_invoke_with_computation(command);
+}
+
+#[test]
+// Baseline: ~76,911,588 L2 gas and ~8,832 L1 data gas.
+#[available_gas(l1_data_gas: 10_500, l2_gas: 92_000_000)]
 fn settles_operator_accepted_vickrey_result() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -407,7 +621,7 @@ fn operator_aborts_after_timeout() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "ONLY_POOL")]
 fn rejects_privacy_invoke_not_authenticated_by_pool() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -431,6 +645,8 @@ fn accepts_additive_bid_tranche() {
 }
 
 #[test]
+// Baseline: ~72,666,832 L2 gas and ~8,256 L1 data gas.
+#[available_gas(l1_data_gas: 9_800, l2_gas: 87_000_000)]
 fn aggregates_tranches_before_vickrey_pricing() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -454,7 +670,7 @@ fn aggregates_tranches_before_vickrey_pricing() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "DUPLICATE_NOTE_ID")]
 fn rejects_operator_reusing_vault_note() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -465,7 +681,7 @@ fn rejects_operator_reusing_vault_note() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "ONLY_OPERATOR")]
 fn rejects_wrong_operator_identity() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -478,8 +694,8 @@ fn rejects_wrong_operator_identity() {
 }
 
 #[test]
-#[should_panic]
-fn rejects_force_reveal_before_deadline() {
+#[should_panic(expected: "REVEAL_TOO_EARLY")]
+fn rejects_settlement_before_force_reveal_window() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
     set_context(auction, REVEAL_AFTER - 1, address(0x999));
@@ -503,7 +719,7 @@ fn rejects_force_reveal_before_deadline() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "INCOMPLETE_BID_SET")]
 fn rejects_incomplete_force_reveal_batch() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -514,7 +730,7 @@ fn rejects_incomplete_force_reveal_batch() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "WRONG_WINNER")]
 fn rejects_wrong_vickrey_winner() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -543,13 +759,233 @@ fn refunds_group_below_reserve_without_a_winner() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "INVALID_REVEAL")]
 fn rejects_reveal_that_does_not_open_bid_commitment() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
     let handle = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, 30, 0x801);
     let revealed = array![RevealedBid { bid_handle: handle, amount: 31, salt: 0x801 }];
     settle(auction, auction_id, revealed.span(), handle);
+}
+
+#[test]
+#[should_panic(expected: "SETTLEMENT_EXPIRED")]
+fn rejects_settlement_at_abort_deadline() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let state = auction.get_auction(auction_id);
+    set_context(auction, ABORT_AFTER, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Settle(
+                SettlementInput {
+                    auction_id,
+                    accepted_bids_hash: state.accepted_bids_hash,
+                    revealed_bids: array![].span(),
+                    winner_bid_handle: 0,
+                    reveals_root: 0x901,
+                    outputs_root: 0x902,
+                    settlement_hash: 0x903,
+                },
+            ),
+        );
+    set_context(auction, ABORT_AFTER, pool_address());
+    privacy(auction).privacy_invoke_with_computation(command);
+}
+
+#[test]
+#[should_panic(expected: "BID_SET_MISMATCH")]
+fn rejects_settlement_with_wrong_accepted_bid_hash() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    set_context(auction, REVEAL_AFTER, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Settle(
+                SettlementInput {
+                    auction_id,
+                    accepted_bids_hash: 0xbad,
+                    revealed_bids: array![].span(),
+                    winner_bid_handle: 0,
+                    reveals_root: 0x901,
+                    outputs_root: 0x902,
+                    settlement_hash: 0x903,
+                },
+            ),
+        );
+    set_context(auction, REVEAL_AFTER, pool_address());
+    privacy(auction).privacy_invoke_with_computation(command);
+}
+
+#[test]
+#[should_panic(expected: "ZERO_REVEALS_ROOT")]
+fn rejects_settlement_without_transcript_roots() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let state = auction.get_auction(auction_id);
+    set_context(auction, REVEAL_AFTER, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Settle(
+                SettlementInput {
+                    auction_id,
+                    accepted_bids_hash: state.accepted_bids_hash,
+                    revealed_bids: array![].span(),
+                    winner_bid_handle: 0,
+                    reveals_root: 0,
+                    outputs_root: 0x902,
+                    settlement_hash: 0x903,
+                },
+            ),
+        );
+    set_context(auction, REVEAL_AFTER, pool_address());
+    privacy(auction).privacy_invoke_with_computation(command);
+}
+
+#[test]
+#[should_panic(expected: "BID_ORDER_MISMATCH")]
+fn rejects_reordered_settlement_bid_set() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let first = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, 20, 0x801);
+    let second = submit_and_accept_bid(auction, auction_id, 0xa2, 0x702, 30, 0x802);
+    let revealed = array![
+        RevealedBid { bid_handle: second, amount: 30, salt: 0x802 },
+        RevealedBid { bid_handle: first, amount: 20, salt: 0x801 },
+    ];
+    settle(auction, auction_id, revealed.span(), auction.get_bid(auction_id, second).group_handle);
+}
+
+#[test]
+#[should_panic(expected: "ZERO_BID_TRANCHE")]
+fn rejects_zero_value_reveal() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let handle = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, 0, 0x801);
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle: handle, amount: 0, salt: 0x801 }].span(),
+        0,
+    );
+}
+
+#[test]
+#[should_panic(expected: ('BID_TOTAL_OVERFLOW',))]
+fn rejects_overflowing_bid_group_total() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let first = submit_bid(auction, auction_id, 0xa1, 0x701, MAX_U128, 0x801);
+    let group_handle = auction.get_bid(auction_id, first).group_handle;
+    let second = add_bid_tranche(auction, auction_id, group_handle, 0x702, 1, 0x802);
+    accept_bid(auction, auction_id, first, 0x701);
+    accept_bid(auction, auction_id, second, 0x702);
+    settle(
+        auction,
+        auction_id,
+        array![
+            RevealedBid { bid_handle: first, amount: MAX_U128, salt: 0x801 },
+            RevealedBid { bid_handle: second, amount: 1, salt: 0x802 },
+        ]
+            .span(),
+        group_handle,
+    );
+}
+
+#[test]
+#[should_panic(expected: "ABORT_TOO_EARLY")]
+fn rejects_abort_before_deadline() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    set_context(auction, ABORT_AFTER - 1, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Abort(AbortInput { auction_id, recovery_hash: 0xa01 }),
+        );
+    set_context(auction, ABORT_AFTER - 1, pool_address());
+    privacy(auction).privacy_invoke_with_computation(command);
+}
+
+#[test]
+#[should_panic(expected: "ZERO_RECOVERY_HASH")]
+fn rejects_abort_without_recovery_commitment() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    set_context(auction, ABORT_AFTER, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Abort(AbortInput { auction_id, recovery_hash: 0 }),
+        );
+    set_context(auction, ABORT_AFTER, pool_address());
+    privacy(auction).privacy_invoke_with_computation(command);
+}
+
+#[test]
+#[should_panic(expected: "NOT_SETTLEABLE")]
+fn rejects_second_settlement() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    settle(auction, auction_id, array![].span(), 0);
+    settle(auction, auction_id, array![].span(), 0);
+}
+
+#[test]
+fn bid_equal_to_reserve_wins_and_pays_reserve() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let handle = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, RESERVE_PRICE, 0x801);
+    let group_handle = auction.get_bid(auction_id, handle).group_handle;
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle: handle, amount: RESERVE_PRICE, salt: 0x801 }].span(),
+        group_handle,
+    );
+    let result = auction.get_result(auction_id);
+    assert!(result.has_winner);
+    assert_eq!(result.winning_bid, RESERVE_PRICE);
+    assert_eq!(result.clearing_price, RESERVE_PRICE);
+}
+
+#[test]
+// Baseline: ~4,633,408,560 L2 gas and ~470,304 L1 data gas for the full
+// lifecycle; the 256-reveal settlement callback itself is ~406,466,644 L2 gas.
+#[available_gas(l1_data_gas: 565_000, l2_gas: 5_560_000_000)]
+fn settles_maximum_supported_bid_set() {
+    let auction = deploy();
+    let mut maximum = config(address(0x501));
+    maximum.max_bids = 256;
+    maximum.reserve_price = 1;
+    set_context(auction, 100, creator_address());
+    let auction_id = auction.create_auction(maximum);
+    let mut revealed_bids: Array<RevealedBid> = array![];
+    let mut winner_group = 0;
+    let mut index: u32 = 0;
+    while index < 256 {
+        let offset: felt252 = index.into();
+        let amount: u128 = index.into() + 1;
+        let note_id = 0x1000 + offset;
+        let salt = 0x2000 + offset;
+        let bid_handle = submit_and_accept_bid(
+            auction, auction_id, 0x3000 + offset, note_id, amount, salt,
+        );
+        revealed_bids.append(RevealedBid { bid_handle, amount, salt });
+        winner_group = auction.get_bid(auction_id, bid_handle).group_handle;
+        index += 1;
+    }
+
+    settle(auction, auction_id, revealed_bids.span(), winner_group);
+    let result = auction.get_result(auction_id);
+    assert_eq!(auction.get_auction(auction_id).bid_count, 256);
+    assert_eq!(result.winner_bid_handle, winner_group);
+    assert_eq!(result.winning_bid, 256);
+    assert_eq!(result.second_highest_bid, 255);
+    assert_eq!(result.clearing_price, 255);
 }
 
 fn deploy_mock_erc20(owner: ContractAddress, supply: u256) -> IERC20AssetDispatcher {
@@ -628,6 +1064,8 @@ fn submit_and_accept_asset_bid(
 }
 
 #[test]
+// Baseline: ~48,412,746 L2 gas and ~5,760 L1 data gas.
+#[available_gas(l1_data_gas: 6_800, l2_gas: 58_000_000)]
 fn escrows_erc20_and_delivers_it_to_committed_winner() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -666,6 +1104,8 @@ fn escrows_erc20_and_delivers_it_to_committed_winner() {
 }
 
 #[test]
+// Baseline: ~26,126,656 L2 gas and ~3,264 L1 data gas.
+#[available_gas(l1_data_gas: 3_800, l2_gas: 31_000_000)]
 fn returns_erc721_to_seller_when_auction_has_no_winner() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -689,6 +1129,8 @@ fn returns_erc721_to_seller_when_auction_has_no_winner() {
 }
 
 #[test]
+// Baseline: ~20,610,374 L2 gas and ~2,784 L1 data gas.
+#[available_gas(l1_data_gas: 3_300, l2_gas: 25_000_000)]
 fn returns_erc1155_after_unfinalized_auction_expires() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -713,7 +1155,7 @@ fn returns_erc1155_after_unfinalized_auction_expires() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected: "WRONG_WINNER_DOMAIN")]
 fn rejects_onchain_asset_with_offchain_winner_domain() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -734,4 +1176,159 @@ fn matches_typescript_asset_commitment_vectors() {
         compute_asset_winner_commitment(address(0x111), 9, address(0x555), 0x666),
         0x389f3d8b639107ceb0a260f4bbb07017e8f138fc002bc8016593d47751bb705,
     );
+}
+
+#[test]
+#[should_panic(expected: "INVALID_WINNER_OPENING")]
+fn rejects_invalid_asset_winner_opening() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let recipient = address(0xb0b);
+    let token = deploy_mock_erc20(seller, 100);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc20, token: token.contract_address, token_id: 0, amount: 40,
+    };
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC20ControlDispatcher { contract_address: token.contract_address }
+        .approve(auction.contract_address, asset.amount);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    let winner_commitment = auction.compute_asset_winner_commitment(auction_id, recipient, 0xc1a1);
+    let (bid_handle, group_handle) = submit_and_accept_asset_bid(
+        auction, auction_id, 0xa1, 0x701, 30, 0x801, winner_commitment,
+    );
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle, amount: 30, salt: 0x801 }].span(),
+        group_handle,
+    );
+    auction.claim_asset(auction_id, recipient, 0xbad);
+}
+
+#[test]
+#[should_panic(expected: "ASSET_NOT_ESCROWED")]
+fn rejects_duplicate_asset_claim() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let recipient = address(0xb0b);
+    let token = deploy_mock_erc20(seller, 100);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc20, token: token.contract_address, token_id: 0, amount: 40,
+    };
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC20ControlDispatcher { contract_address: token.contract_address }
+        .approve(auction.contract_address, asset.amount);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    let secret = 0xc1a1;
+    let winner_commitment = auction.compute_asset_winner_commitment(auction_id, recipient, secret);
+    let (bid_handle, group_handle) = submit_and_accept_asset_bid(
+        auction, auction_id, 0xa1, 0x701, 30, 0x801, winner_commitment,
+    );
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle, amount: 30, salt: 0x801 }].span(),
+        group_handle,
+    );
+    auction.claim_asset(auction_id, recipient, secret);
+    auction.claim_asset(auction_id, recipient, secret);
+}
+
+#[test]
+#[should_panic(expected: "ASSET_NOT_RECLAIMABLE")]
+fn rejects_asset_reclaim_while_bidding() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let token_id = 77;
+    let token = deploy_mock_erc721(seller, token_id);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc721, token: token.contract_address, token_id, amount: 1,
+    };
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC721ControlDispatcher { contract_address: token.contract_address }
+        .approve(auction.contract_address, token_id);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    set_context(auction, 150, address(0x999));
+    auction.reclaim_asset(auction_id);
+}
+
+#[test]
+#[should_panic(expected: "UNSOLICITED_ERC721")]
+fn rejects_unsolicited_erc721_safe_transfer() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let token_id = 77;
+    let token = deploy_mock_erc721(seller, token_id);
+    start_cheat_caller_address(token.contract_address, seller);
+    token.safe_transfer_from(seller, auction.contract_address, token_id, array![].span());
+}
+
+#[test]
+// Baseline: ~46,777,426 L2 gas and ~5,760 L1 data gas.
+#[available_gas(l1_data_gas: 6_800, l2_gas: 56_000_000)]
+fn delivers_erc721_to_committed_winner() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let recipient = address(0xb0b);
+    let token_id = 77;
+    let token = deploy_mock_erc721(seller, token_id);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc721, token: token.contract_address, token_id, amount: 1,
+    };
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC721ControlDispatcher { contract_address: token.contract_address }
+        .approve(auction.contract_address, token_id);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    let secret = 0xc1a1;
+    let winner_commitment = auction.compute_asset_winner_commitment(auction_id, recipient, secret);
+    let (bid_handle, group_handle) = submit_and_accept_asset_bid(
+        auction, auction_id, 0xa1, 0x701, 30, 0x801, winner_commitment,
+    );
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle, amount: 30, salt: 0x801 }].span(),
+        group_handle,
+    );
+    auction.claim_asset(auction_id, recipient, secret);
+    assert_eq!(token.owner_of(token_id), recipient);
+    assert_eq!(auction.get_auction(auction_id).fulfillment_status, FulfillmentStatus::Claimed);
+}
+
+#[test]
+// Baseline: ~48,579,866 L2 gas and ~5,952 L1 data gas.
+#[available_gas(l1_data_gas: 7_100, l2_gas: 58_000_000)]
+fn delivers_erc1155_to_committed_winner() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let recipient = address(0xb0b);
+    let token_id = 88;
+    let token = deploy_mock_erc1155(seller, token_id, 25);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc1155, token: token.contract_address, token_id, amount: 7,
+    };
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC1155ControlDispatcher { contract_address: token.contract_address }
+        .set_approval_for_all(auction.contract_address, true);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    let secret = 0xc1a1;
+    let winner_commitment = auction.compute_asset_winner_commitment(auction_id, recipient, secret);
+    let (bid_handle, group_handle) = submit_and_accept_asset_bid(
+        auction, auction_id, 0xa1, 0x701, 30, 0x801, winner_commitment,
+    );
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle, amount: 30, salt: 0x801 }].span(),
+        group_handle,
+    );
+    auction.claim_asset(auction_id, recipient, secret);
+    assert_eq!(token.balance_of(recipient, token_id), 7);
+    assert_eq!(token.balance_of(auction.contract_address, token_id), 0);
+    assert_eq!(auction.get_auction(auction_id).fulfillment_status, FulfillmentStatus::Claimed);
 }
