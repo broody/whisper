@@ -83,6 +83,12 @@ The operator controls the privacy account that owns every escrow note. Bidders t
 
 The contract receives an `outputs_root`, but the standard pool proof does not currently enforce that the actual encrypted output recipients match Whisper's application commitments. That link is an operator attestation.
 
+## Asset escrow does not remove payment custody
+
+`WhisperAuction` can hold an ERC-20, ERC-721, or ERC-1155 lot and release it only to the recipient opening the verified winning commitment. This removes the seller's ability to refuse delivery of that deposited token.
+
+It does not verify that the private proceeds note was actually created for the seller. A malicious operator could still settle the mathematically correct auction while redirecting or withholding private outputs, after which the winner could claim the onchain lot. Until output binding exists, both bidders and sellers remain inside the operator trust boundary. The public also sees the lot deposit, token details, and eventual claim recipient; the asset side is not private.
+
 ## Failure modes
 
 | Failure | Current result |

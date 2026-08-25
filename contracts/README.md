@@ -4,6 +4,7 @@ The `whisper` Scarb package exports:
 
 - `WhisperAuction`, the deployable reference contract.
 - `IWhisperAuction`, `IWhisperBidAction`, `IWhisperPrivacyAction`, and ABI dispatchers.
+- Standard token/receiver interfaces and fulfillment types.
 - Generic auction, bid, settlement, result, and status types.
 - Canonical bid-group, tranche, operator, and reveal hashes.
 - `compute_vickrey_price`, the deterministic pricing helper.
@@ -16,6 +17,14 @@ whisper = { path = "../whisper/contracts" }
 ```
 
 One `payment_token` is snapshotted per auction. It may be any ERC-20 supported by the configured STRK20 pool.
+
+## Fulfillment
+
+`AuctionConfig.fulfillment` is required and has four kinds: `Offchain`, `Erc20`, `Erc721`, and `Erc1155`. Offchain auctions require zero token fields and let applications such as Stake Wars interpret the generic `winner_commitment`. Token auctions require the seller to approve `WhisperAuction` before calling `create_auction`; the same transaction pulls and verifies the lot before the auction opens, so a failure rolls everything back.
+
+ERC-20 uses an amount and token ID zero, ERC-721 uses a token ID and amount one, and ERC-1155 uses both fields. Onchain variants require `winner_payload_domain = WHISPER_ASSET_WINNER_V1`. After settlement, anyone may relay `claim_asset(auction_id, recipient, secret)`, but the lot is sent only when `(recipient, secret)` opens the winning commitment bound to the Whisper address and auction ID. Lots return to the recorded creator after an abort, a settled no-winner result, or an unfinalized auction whose `abort_after` deadline has passed. Winning lots have no seller clawback and remain claimable indefinitely.
+
+Integrated escrow prevents seller non-delivery for a deposited token, but the current private payment vault and settlement outputs remain under the 1-of-1 operator trust model. Obtain an independent review before using meaningful assets.
 
 ## Canonical-pool flow
 

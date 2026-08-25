@@ -23,6 +23,7 @@ export default defineConfig({
       items: [
         { text: "Encrypted notes", link: "/concepts/encrypted-notes" },
         { text: "Bid lifecycle", link: "/auctions/bid-lifecycle" },
+        { text: "Auction fulfillment", link: "/auctions/fulfillment" },
       ],
     },
     {

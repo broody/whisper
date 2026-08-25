@@ -7,6 +7,7 @@ import type { PathsForPages } from 'waku/router'
 type Page =
   | { path: '/architecture/operator'; render: 'static' }
   | { path: '/auctions/bid-lifecycle'; render: 'static' }
+  | { path: '/auctions/fulfillment'; render: 'static' }
   | { path: '/concepts/encrypted-notes'; render: 'static' }
   | { path: '/how-whisper-works'; render: 'static' }
   | { path: '/'; render: 'static' }

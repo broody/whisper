@@ -16,6 +16,7 @@ This page follows one bid from a bidder's private balance into the auction vault
 | Whisper Cairo contract | Public configuration, handles, commitments, accepted set, revealed settlement | Enforces deadlines, uniqueness, commitment openings, and Vickrey pricing |
 | Operator vault | Its own viewing key, received notes, decrypted capsules | Validates incoming escrow, accepts funded tranches, and creates settlement outputs |
 | Relayer | The already-built call and proof | Pays gas and submits the pool transaction without needing private note data |
+| Fulfillment path | Winning commitment and explicit fulfillment descriptor | Lets an application award an offchain right or makes Whisper release an escrowed token lot |
 
 The Whisper Cairo contract is **not** the private vault. Current STRK20 notes are owned and spent by a registered privacy account, so the first version uses a backend-controlled vault account.
 
@@ -38,7 +39,7 @@ The viewing key and reveal key are intentionally different. The first controls p
 
 ### The auction publishes immutable configuration
 
-An auction fixes its payment token, reserve, capacity, three deadlines, vault address, vault public key, reveal public key, operator identity commitment, seller commitment, metadata hash, and winner-payload domain.
+An auction fixes its payment token, reserve, capacity, three deadlines, vault address, vault public key, reveal public key, operator identity commitment, seller commitment, metadata hash, winner-payload domain, and explicit fulfillment descriptor. Stake Wars uses the `Offchain` kind; an ERC-20/721/1155 seller approves Whisper and selects the matching token kind so the lot is deposited before bidding opens.
 
 ```mermaid
 flowchart TB
@@ -47,11 +48,13 @@ flowchart TB
   timing["Bid, force-reveal, abort deadlines"]
   vault["Vault address + public keys"]
   app["Metadata + winner payload domain"]
+  fulfillment["Offchain or escrowed token fulfillment"]
 
   config --> token
   config --> timing
   config --> vault
   config --> app
+  config --> fulfillment
 ```
 
 ## 3. The dapp and wallet prepare two encrypted objects

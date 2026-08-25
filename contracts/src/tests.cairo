@@ -1,8 +1,14 @@
 use snforge_std::{
-    ContractClassTrait, DeclareResultTrait, declare, start_cheat_block_timestamp,
-    start_cheat_caller_address,
+    CheatSpan, ContractClassTrait, DeclareResultTrait, cheat_caller_address, declare,
+    start_cheat_block_timestamp, start_cheat_caller_address, stop_cheat_caller_address,
 };
 use starknet::{ContractAddress, SyscallResultTrait};
+use crate::asset_hashes::{ASSET_WINNER_DOMAIN, compute_asset_winner_commitment};
+use crate::asset_interface::{
+    IERC1155AssetDispatcher, IERC1155AssetDispatcherTrait, IERC20AssetDispatcher,
+    IERC20AssetDispatcherTrait, IERC721AssetDispatcher, IERC721AssetDispatcherTrait,
+};
+use crate::asset_types::{AuctionFulfillment, FulfillmentKind, FulfillmentStatus};
 use crate::hashes::{
     compute_bid_group_handle, compute_bid_handle, compute_operator_identity_commitment,
     compute_reveal_commitment,
@@ -13,6 +19,11 @@ use crate::interface::{
     IWhisperPrivacyActionDispatcherTrait,
 };
 use crate::pricing::compute_vickrey_price;
+use crate::test_tokens::{
+    IMockERC1155ControlDispatcher, IMockERC1155ControlDispatcherTrait, IMockERC20ControlDispatcher,
+    IMockERC20ControlDispatcherTrait, IMockERC721ControlDispatcher,
+    IMockERC721ControlDispatcherTrait,
+};
 use crate::types::{
     AbortInput, AcceptBidInput, AuctionConfig, AuctionStatus, BidIntent, BidTopUpIntent,
     PrivacyRequest, RevealedBid, SettlementInput, WalletBidRequest,
@@ -41,6 +52,9 @@ fn config(token: ContractAddress) -> AuctionConfig {
         payment_token: token,
         proceeds_recipient_commitment: 0x301,
         metadata_hash: 0x302,
+        fulfillment: AuctionFulfillment {
+            kind: FulfillmentKind::Offchain, token: address(0), token_id: 0, amount: 0,
+        },
         winner_payload_domain: 0x303,
         reserve_price: RESERVE_PRICE,
         max_bids: 16,
@@ -536,4 +550,188 @@ fn rejects_reveal_that_does_not_open_bid_commitment() {
     let handle = submit_and_accept_bid(auction, auction_id, 0xa1, 0x701, 30, 0x801);
     let revealed = array![RevealedBid { bid_handle: handle, amount: 31, salt: 0x801 }];
     settle(auction, auction_id, revealed.span(), handle);
+}
+
+fn deploy_mock_erc20(owner: ContractAddress, supply: u256) -> IERC20AssetDispatcher {
+    let mut calldata = array![];
+    owner.serialize(ref calldata);
+    supply.serialize(ref calldata);
+    let contract_class = declare("MockERC20").unwrap();
+    let (contract_address, _) = contract_class.contract_class().deploy(@calldata).unwrap_syscall();
+    IERC20AssetDispatcher { contract_address }
+}
+
+fn deploy_mock_erc721(owner: ContractAddress, token_id: u256) -> IERC721AssetDispatcher {
+    let mut calldata = array![];
+    owner.serialize(ref calldata);
+    token_id.serialize(ref calldata);
+    let contract_class = declare("MockERC721").unwrap();
+    let (contract_address, _) = contract_class.contract_class().deploy(@calldata).unwrap_syscall();
+    IERC721AssetDispatcher { contract_address }
+}
+
+fn deploy_mock_erc1155(
+    owner: ContractAddress, token_id: u256, amount: u256,
+) -> IERC1155AssetDispatcher {
+    let mut calldata = array![];
+    owner.serialize(ref calldata);
+    token_id.serialize(ref calldata);
+    amount.serialize(ref calldata);
+    let contract_class = declare("MockERC1155").unwrap();
+    let (contract_address, _) = contract_class.contract_class().deploy(@calldata).unwrap_syscall();
+    IERC1155AssetDispatcher { contract_address }
+}
+
+fn asset_config(asset: AuctionFulfillment) -> AuctionConfig {
+    let mut result = config(address(0x501));
+    result.fulfillment = asset;
+    result.winner_payload_domain = ASSET_WINNER_DOMAIN;
+    result
+}
+
+fn create_asset_auction(
+    auction: IWhisperAuctionDispatcher, seller: ContractAddress, asset: AuctionFulfillment,
+) -> u64 {
+    start_cheat_block_timestamp(auction.contract_address, 100);
+    cheat_caller_address(auction.contract_address, seller, CheatSpan::TargetCalls(1));
+    auction.create_auction(asset_config(asset))
+}
+
+fn submit_and_accept_asset_bid(
+    auction: IWhisperAuctionDispatcher,
+    auction_id: u64,
+    bid_nonce: felt252,
+    note_id: felt252,
+    amount: u128,
+    salt: felt252,
+    winner_commitment: felt252,
+) -> (felt252, felt252) {
+    let refund_commitment = note_id + 0x1000;
+    let reveal_commitment = compute_reveal_commitment(
+        auction_id, amount, salt, refund_commitment, winner_commitment,
+    );
+    let group_handle = compute_bid_group_handle(
+        auction_id, bid_nonce, refund_commitment, winner_commitment,
+    );
+    let bid_handle = compute_bid_handle(auction_id, group_handle, 0, reveal_commitment);
+    set_context(auction, 150, pool_address());
+    wallet_bid(auction)
+        .privacy_invoke(
+            WalletBidRequest::SubmitBid(
+                BidIntent {
+                    auction_id, bid_nonce, reveal_commitment, refund_commitment, winner_commitment,
+                },
+            ),
+        );
+    accept_bid(auction, auction_id, bid_handle, note_id);
+    (bid_handle, group_handle)
+}
+
+#[test]
+fn escrows_erc20_and_delivers_it_to_committed_winner() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let recipient = address(0xb0b);
+    let token = deploy_mock_erc20(seller, 100);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc20, token: token.contract_address, token_id: 0, amount: 40,
+    };
+
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC20ControlDispatcher { contract_address: token.contract_address }
+        .approve(auction.contract_address, asset.amount);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+
+    assert_eq!(token.balance_of(seller), 60);
+    assert_eq!(token.balance_of(auction.contract_address), 40);
+    assert_eq!(auction.get_auction(auction_id).creator, seller);
+    assert_eq!(auction.get_auction(auction_id).fulfillment_status, FulfillmentStatus::Escrowed);
+    let secret = 0xc1a1;
+    let winner_commitment = auction.compute_asset_winner_commitment(auction_id, recipient, secret);
+    let (bid_handle, group_handle) = submit_and_accept_asset_bid(
+        auction, auction_id, 0xa1, 0x701, 30, 0x801, winner_commitment,
+    );
+    settle(
+        auction,
+        auction_id,
+        array![RevealedBid { bid_handle, amount: 30, salt: 0x801 }].span(),
+        group_handle,
+    );
+
+    auction.claim_asset(auction_id, recipient, secret);
+    assert_eq!(token.balance_of(recipient), 40);
+    assert_eq!(token.balance_of(auction.contract_address), 0);
+    assert_eq!(auction.get_auction(auction_id).fulfillment_status, FulfillmentStatus::Claimed);
+}
+
+#[test]
+fn returns_erc721_to_seller_when_auction_has_no_winner() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let token_id = 77;
+    let token = deploy_mock_erc721(seller, token_id);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc721, token: token.contract_address, token_id, amount: 1,
+    };
+
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC721ControlDispatcher { contract_address: token.contract_address }
+        .approve(auction.contract_address, token_id);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    assert_eq!(token.owner_of(token_id), auction.contract_address);
+
+    settle(auction, auction_id, array![].span(), 0);
+    auction.reclaim_asset(auction_id);
+    assert_eq!(token.owner_of(token_id), seller);
+    assert_eq!(auction.get_auction(auction_id).fulfillment_status, FulfillmentStatus::Reclaimed);
+}
+
+#[test]
+fn returns_erc1155_after_unfinalized_auction_expires() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let token_id = 88;
+    let token = deploy_mock_erc1155(seller, token_id, 25);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc1155, token: token.contract_address, token_id, amount: 7,
+    };
+
+    start_cheat_caller_address(token.contract_address, seller);
+    IMockERC1155ControlDispatcher { contract_address: token.contract_address }
+        .set_approval_for_all(auction.contract_address, true);
+    stop_cheat_caller_address(token.contract_address);
+    let auction_id = create_asset_auction(auction, seller, asset);
+    assert_eq!(token.balance_of(auction.contract_address, token_id), 7);
+
+    start_cheat_block_timestamp(auction.contract_address, ABORT_AFTER);
+    auction.reclaim_asset(auction_id);
+    assert_eq!(token.balance_of(seller, token_id), 25);
+    assert_eq!(token.balance_of(auction.contract_address, token_id), 0);
+    assert_eq!(auction.get_auction(auction_id).fulfillment_status, FulfillmentStatus::Reclaimed);
+}
+
+#[test]
+#[should_panic]
+fn rejects_onchain_asset_with_offchain_winner_domain() {
+    let auction = deploy();
+    let seller = address(0xa11ce);
+    let token = deploy_mock_erc20(seller, 100);
+    let asset = AuctionFulfillment {
+        kind: FulfillmentKind::Erc20, token: token.contract_address, token_id: 0, amount: 40,
+    };
+    let mut bad_config = asset_config(asset);
+    bad_config.winner_payload_domain = 0x303;
+
+    set_context(auction, 100, seller);
+    auction.create_auction(bad_config);
+}
+
+#[test]
+fn matches_typescript_asset_commitment_vectors() {
+    assert_eq!(
+        compute_asset_winner_commitment(address(0x111), 9, address(0x555), 0x666),
+        0x389f3d8b639107ceb0a260f4bbb07017e8f138fc002bc8016593d47751bb705,
+    );
 }

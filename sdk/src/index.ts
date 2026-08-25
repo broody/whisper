@@ -40,3 +40,13 @@ export {
   type WhisperCapsuleContext,
   type WhisperEncryptedCapsule,
 } from "./capsule.js";
+export {
+  WHISPER_ASSET_WINNER_DOMAIN,
+  WHISPER_OFFCHAIN_FULFILLMENT,
+  WhisperFulfillmentKind,
+  computeAssetWinnerCommitment,
+  encodeWhisperAuctionFulfillment,
+  type WhisperAuctionFulfillment,
+  type WhisperAssetWinnerOpening,
+  type WhisperFulfillmentKindValue,
+} from "./fulfillment.js";

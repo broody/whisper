@@ -7,8 +7,16 @@ use crate::types::{
 #[starknet::interface]
 pub trait IWhisperAuction<TContractState> {
     fn create_auction(ref self: TContractState, config: AuctionConfig) -> u64;
+    fn claim_asset(
+        ref self: TContractState, auction_id: u64, recipient: ContractAddress, secret: felt252,
+    );
+    fn reclaim_asset(ref self: TContractState, auction_id: u64);
 
     fn get_pool_address(self: @TContractState) -> ContractAddress;
+    fn get_asset_winner_payload_domain(self: @TContractState) -> felt252;
+    fn compute_asset_winner_commitment(
+        self: @TContractState, auction_id: u64, recipient: ContractAddress, secret: felt252,
+    ) -> felt252;
     fn get_auction(self: @TContractState, auction_id: u64) -> Auction;
     fn get_bid_group(self: @TContractState, auction_id: u64, group_handle: felt252) -> BidGroup;
     fn get_bid(self: @TContractState, auction_id: u64, bid_handle: felt252) -> SealedBid;

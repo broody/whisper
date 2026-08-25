@@ -70,6 +70,32 @@ The identity key is derived by STRK20 for the Whisper contract and is never supp
 
 `vault_public_key` is the registered STRK20 recipient key. `reveal_public_key` is a separate application-layer encryption key for bid capsules; production deployments must not reuse the pool viewing key for that purpose.
 
+### Fulfillment model
+
+Every `AuctionConfig` contains a fixed-width `fulfillment` descriptor with a kind, token contract, token ID, and amount. The supported kinds are `Offchain`, `Erc20`, `Erc721`, and `Erc1155`. Stake Wars explicitly uses `Offchain` with all token fields zero and interprets the winning commitment as the controller entitlement.
+
+For token variants, the seller approves `WhisperAuction` and calls the same `create_auction` entrypoint. The contract pulls the ERC-20, ERC-721, or ERC-1155 lot before storing the auction, and Starknet transaction atomicity rolls back the token transfer if any later validation fails. The seller remains the auction's public `creator`; no adapter identity or metadata-hash indirection exists.
+
+Token auctions require:
+
+```text
+winner_payload_domain = "WHISPER_ASSET_WINNER_V1"
+
+winner_commitment = Poseidon(
+  "WHISPER_ASSET_WINNER_V1",
+  whisper_address,
+  auction_id,
+  recipient,
+  secret
+)
+```
+
+ERC-20 requires `token_id = 0` and a non-zero amount; ERC-721 requires `amount = 1`; ERC-1155 uses both fields with a non-zero amount. Whisper verifies exact ERC-20/ERC-1155 balance changes and ERC-721 ownership, rejects unsolicited safe transfers, and implements the standard ERC-721/1155 receiver interfaces.
+
+After a winning settlement, anyone may relay `claim_asset`, but the lot always goes to the committed recipient. A deposited lot returns to its creator after an abort, a settled no-winner result, or an unfinalized auction at or after `abort_after`. A winning lot remains claimable indefinitely and has no seller clawback.
+
+Integrated asset escrow enforces token delivery, not private-payment correctness. The current operator can still redirect or withhold the actual private settlement outputs because the pool does not bind them to Whisper's `outputs_root`; sellers of onchain lots remain inside that custody trust model.
+
 ## Bid groups and tranche transcripts
 
 For the initial tranche, the bidder privately chooses:
@@ -198,6 +224,8 @@ Settlement and abort are terminal and mutually exclusive.
 | Refund/proceeds recipient plaintext | Winner commitment, winning bid, clearing price |
 | Vault viewing key and note plaintext | Reveal, output, and settlement roots |
 
+For onchain lots, the token contract, token ID, quantity, seller, and deposit are public from creation. A winning claim later reveals its public recipient; none of those asset-side fields are hidden by STRK20.
+
 Private transfers can still be correlated through unique amounts, timing, or separate public shield/unshield operations.
 
 ## Contract checks versus operator checks
@@ -214,6 +242,8 @@ Private transfers can still be correlated through unique amounts, timing, or sep
 | Consumed notes are owned and not double-spent | Canonical pool |
 | Private batch conserves token value | Canonical pool |
 | Refunds/proceeds match the advertised output root | Operator attestation |
+| ERC-20/721/1155 lot is deposited before bidding | Whisper contract + token contract |
+| Escrowed lot can only reach the winning committed recipient | Whisper contract + winner opening |
 
 ## Implementation status
 
@@ -227,7 +257,9 @@ Implemented in the current source:
 - ordered accepted-set commitment and reveal verification;
 - TypeScript encoders and Cairo-compatible Poseidon helpers;
 - group aggregation before Vickrey pricing, combined group refunds/change, and deterministic tie-breaking;
-- cross-language vectors and negative-path tests.
+- cross-language vectors and negative-path tests;
+- unified offchain/ERC-20/ERC-721/ERC-1155 fulfillment, receiver checks, timeout/no-sale recovery, and winner claims; and
+- TypeScript fulfillment encoders and cross-language winner commitment vectors.
 
 Implemented in the operator and SDK application layer:
 
@@ -250,7 +282,8 @@ Still required before a production auction:
 - interactive Ready Wallet bid and additive top-up smoke tests for the standard-invoke ABI;
 - durable event polling, scheduling, worker leases, alerting, and recovery automation;
 - mainnet configuration and deployment verification;
-- independent Cairo and operational security review.
+- independent Cairo and operational security review; and
+- independent review and testnet exercise of integrated asset escrow before meaningful onchain lots use it.
 
 ## References
 

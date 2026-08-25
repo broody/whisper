@@ -81,7 +81,22 @@ The standard-invoke class is deployed on Sepolia and a direct official-SDK trans
 
 Mainnet registration, deployment, and transactions require explicit approval when this phase begins.
 
-## 9. Testing
+## 9. Phase 5 — unified auction fulfillment ✅ done 2026-08-24
+
+1. Make fulfillment an explicit, required part of `AuctionConfig`: `Offchain`, `Erc20`, `Erc721`, or `Erc1155` with a fixed-width token descriptor.
+2. Integrate token custody into `WhisperAuction.create_auction`, atomically pulling and verifying an ERC-20, ERC-721, or ERC-1155 lot before bidding opens. Keep the seller as the auction creator and leave `metadata_hash` application-defined.
+3. Add a domain-separated winner claim commitment binding the Whisper contract, auction ID, recipient, and secret. Anyone may relay a valid claim, but the asset can only be delivered to the committed recipient.
+4. Return the lot to the creator after an operator abort, a settled no-winner result, or an expired unfinalized auction. Keep winning lots claimable indefinitely rather than adding a seller-controlled post-settlement clawback.
+5. Update the operator decoder and Stake Wars arbiter reader for the breaking `Auction` ABI. Stake Wars requires the explicit `Offchain` kind and rejects token auctions as canonical game rounds.
+6. Add Cairo contract tests, TypeScript fulfillment helpers and cross-language vectors, protocol documentation, and an explicit audit requirement before mainnet use.
+
+This phase changes no STRK20 note, Wallet API, capsule, or operator-key behavior. It intentionally breaks the auction creation/state ABI to replace the separate adapter with one coherent interface.
+
+Implemented locally: integrated escrow, standard ERC-721/1155 receiver and SRC5 boundaries, exact token receipt checks, reentrancy protection, committed winner claims, no-sale/abort/timeout recovery, unified TypeScript encoders and hashes, updated Whisper operator decoding, strict Stake Wars offchain validation, cross-language vectors, and fulfillment documentation. Cairo (30), SDK (13), and operator (19) tests pass; all builds, typechecks, Cairo formatting, and the documentation production build pass.
+
+Sepolia validation completed 2026-08-24: v0.3 was declared and deployed at `0x03db9a75d8f90384e300b32bc4f08e3ac273325fbd18d0ef037a31795cfbb586`. Explicit offchain auction 1 completed the full private bid, replay-protected acceptance, and settlement path and was decoded successfully through the Stake Wars Go reader. ERC-20 auction 2 atomically escrowed exactly 0.01 STRK and returned it to the seller through the timeout reclaim path. ERC-721, ERC-1155, and winning ERC-20 claim paths remain covered locally and need dedicated live test tokens before equivalent Sepolia coverage.
+
+## 10. Testing
 
 - Headless: SDK and operator typecheck/build/tests; Cairo format/build/tests.
 - Integration: official SDK against the selected canonical pool and discovery/proving services.
@@ -89,27 +104,31 @@ Mainnet registration, deployment, and transactions require explicit approval whe
 - Manual operator: verify discovery and acceptance of each tranche, settle the aggregate groups, and discover all private outputs.
 - Pure local tests verify orchestration but do not prove compatibility with hosted proving, discovery, screening, or the deployed pool ABI.
 
-## 10. Compliance and security notes
+## 11. Compliance and security notes
 
 - Deposit screening is enforced onchain by the protocol and applies regardless of proving provider.
 - Selective disclosure can support legitimate requests but is not automatic compliance or regulator endorsement; the application owns its legal and compliance decisions.
 - A normal dapp never handles a user's viewing key, notes, or proofs. The backend stores only its own vault credentials through injected secret providers.
 - The application-layer capsule format is experimental and unaudited.
+- The integrated asset escrow must receive independent Cairo review before mainnet deployment. It prevents seller non-delivery but does not remove the current 1-of-1 operator's custody over private bid notes and settlement outputs.
 
-## 11. Open items to re-verify at build time
+## 12. Open items to re-verify at build time
 
 - Canonical mainnet pool ABI and the exact pool event fields needed to derive output note IDs from a transaction.
 - Current Privacy SDK release, package-registry authentication, proving URL, discovery URL, and relayer submission requirements.
 - Current Wallet API version, Ready support for atomic `transfer` + standard `invoke`, and exact Starknet.js/get-starknet pins in the consuming dapp.
 - Deploy the new Wallet API callback ABI to Sepolia and complete initial-bid plus additive-tranche testing with Ready.
+- Register the verified v0.3 offchain auction as a canonical Stake Wars round when the API's explicit admin procedure is implemented; no production API database or Fly deployment was changed during the contract smoke test.
+- Exercise ERC-721, ERC-1155, and winning token-claim flows on Sepolia with dedicated reviewed test tokens; the live v0.3 smoke currently covers offchain settlement plus ERC-20 escrow and timeout reclaim.
 - Confirm whether the alpha-Sepolia proving and discovery services are formally supported for sprint teams; until then, treat them as replaceable test infrastructure.
 - Run a self-hosted transaction prover for mainnet operator settlement; bidders should shield through a privacy-enabled wallet so the operator prover does not need to originate screened deposits.
 - Design and automate a durable inventory of vault-owned replay-protection notes for operator-only acceptance transactions; a bare `ComputeAndInvoke` callback is rejected as `NO_REPLAY_PROTECTION`.
 - Re-verify the exact sequencing and maturity requirements for settlement and consecutive replay-baton rotations.
 - Capsule cryptographic review and key-rotation policy.
 - Committee-ready custody remains deferred in [GitHub issue #1](https://github.com/broody/whisper/issues/1) until the Sepolia end-to-end path works.
+- OpenZeppelin Cairo token-interface compatibility and receiver behavior for the exact ERC-20, ERC-721, and ERC-1155 contracts accepted by Whisper.
 
-## 12. Links
+## 13. Links
 
 - [Official Privacy SDK](https://github.com/starkware-libs/starknet-privacy/blob/main/sdk/README.md)
 - [SDK getting started](https://strk20-by-example.org/sdk/getting-started)

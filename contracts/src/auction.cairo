@@ -8,7 +8,14 @@ pub mod WhisperAuction {
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_block_timestamp, get_caller_address};
+    use starknet::{ContractAddress, get_block_timestamp, get_caller_address, get_contract_address};
+    use crate::asset_hashes::{ASSET_WINNER_DOMAIN, compute_asset_winner_commitment};
+    use crate::asset_interface::{
+        IERC1155AssetDispatcher, IERC1155AssetDispatcherTrait, IERC1155Receiver,
+        IERC20AssetDispatcher, IERC20AssetDispatcherTrait, IERC721AssetDispatcher,
+        IERC721AssetDispatcherTrait, IERC721Receiver, ISRC5,
+    };
+    use crate::asset_types::{AuctionFulfillment, FulfillmentKind, FulfillmentStatus};
     use crate::hashes::{
         compute_bid_group_handle, compute_bid_handle, compute_operator_identity_commitment,
         compute_reveal_commitment,
@@ -22,6 +29,10 @@ pub mod WhisperAuction {
     };
 
     const ACCEPTED_BIDS_DOMAIN: felt252 = 'WHISPER_BIDS_V1';
+    const IERC721_RECEIVER_ID: felt252 =
+        0x3a0dff5f70d80458ad14ae37bb182a728e3c8cdda0402a5daa86620bdf910bc;
+    const IERC1155_RECEIVER_ID: felt252 =
+        0x15e8665b5af20040c3af1670509df02eb916375cdf7d8cbaf7bd553a257515e;
     pub const MAX_SUPPORTED_BIDS: u32 = 256;
 
     #[storage]
@@ -34,6 +45,12 @@ pub mod WhisperAuction {
         bid_handles: Map<(u64, u32), felt252>,
         used_note_ids: Map<felt252, bool>,
         results: Map<u64, AuctionResult>,
+        locked: bool,
+        pending_kind: FulfillmentKind,
+        pending_token: ContractAddress,
+        pending_seller: ContractAddress,
+        pending_token_id: u256,
+        pending_amount: u256,
     }
 
     #[event]
@@ -45,6 +62,8 @@ pub mod WhisperAuction {
         BidRevealed: BidRevealed,
         AuctionSettled: AuctionSettled,
         AuctionAborted: AuctionAborted,
+        AssetClaimed: AssetClaimed,
+        AssetReclaimed: AssetReclaimed,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -55,6 +74,10 @@ pub mod WhisperAuction {
         creator: ContractAddress,
         payment_token: ContractAddress,
         metadata_hash: felt252,
+        fulfillment_kind: FulfillmentKind,
+        asset_token: ContractAddress,
+        asset_token_id: u256,
+        asset_amount: u256,
         reserve_price: u128,
         max_bids: u32,
         bidding_deadline: u64,
@@ -118,6 +141,22 @@ pub mod WhisperAuction {
         recovery_hash: felt252,
     }
 
+    #[derive(Drop, starknet::Event)]
+    struct AssetClaimed {
+        #[key]
+        auction_id: u64,
+        #[key]
+        recipient: ContractAddress,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct AssetReclaimed {
+        #[key]
+        auction_id: u64,
+        #[key]
+        seller: ContractAddress,
+    }
+
     #[constructor]
     fn constructor(ref self: ContractState, pool_address: ContractAddress) {
         assert!(!pool_address.is_zero(), "ZERO_POOL");
@@ -128,6 +167,7 @@ pub mod WhisperAuction {
     #[abi(embed_v0)]
     impl WhisperAuctionImpl of IWhisperAuction<ContractState> {
         fn create_auction(ref self: ContractState, config: AuctionConfig) -> u64 {
+            self.enter();
             let now = get_block_timestamp();
             assert!(!config.payment_token.is_zero(), "ZERO_TOKEN");
             assert!(config.proceeds_recipient_commitment.is_non_zero(), "ZERO_PROCEEDS");
@@ -143,14 +183,18 @@ pub mod WhisperAuction {
             assert!(config.operator_identity_commitment.is_non_zero(), "ZERO_OPERATOR");
 
             let auction_id = self.next_auction_id.read();
-            self.next_auction_id.write(auction_id + 1);
             let creator = get_caller_address();
+            self.validate_fulfillment(config.fulfillment, config.winner_payload_domain);
+            self.pull_asset(creator, config.fulfillment);
+            self.next_auction_id.write(auction_id + 1);
             let auction = Auction {
                 id: auction_id,
                 creator,
                 payment_token: config.payment_token,
                 proceeds_recipient_commitment: config.proceeds_recipient_commitment,
                 metadata_hash: config.metadata_hash,
+                fulfillment: config.fulfillment,
+                fulfillment_status: self.initial_fulfillment_status(config.fulfillment.kind),
                 winner_payload_domain: config.winner_payload_domain,
                 reserve_price: config.reserve_price,
                 max_bids: config.max_bids,
@@ -172,6 +216,7 @@ pub mod WhisperAuction {
                 recovery_hash: 0,
             };
             self.auctions.write(auction_id, auction);
+            self.exit();
             self
                 .emit(
                     AuctionCreated {
@@ -179,6 +224,10 @@ pub mod WhisperAuction {
                         creator,
                         payment_token: config.payment_token,
                         metadata_hash: config.metadata_hash,
+                        fulfillment_kind: config.fulfillment.kind,
+                        asset_token: config.fulfillment.token,
+                        asset_token_id: config.fulfillment.token_id,
+                        asset_amount: config.fulfillment.amount,
                         reserve_price: config.reserve_price,
                         max_bids: config.max_bids,
                         bidding_deadline: config.bidding_deadline,
@@ -192,8 +241,62 @@ pub mod WhisperAuction {
             auction_id
         }
 
+        fn claim_asset(
+            ref self: ContractState, auction_id: u64, recipient: ContractAddress, secret: felt252,
+        ) {
+            self.enter();
+            assert!(!recipient.is_zero(), "ZERO_RECIPIENT");
+            assert!(recipient != get_contract_address(), "RECIPIENT_IS_WHISPER");
+            assert!(secret.is_non_zero(), "ZERO_CLAIM_SECRET");
+            let mut auction = self.require_escrowed_asset(auction_id);
+            assert!(auction.status == AuctionStatus::Settled, "AUCTION_NOT_SETTLED");
+            let result = self.results.read(auction_id);
+            assert!(result.has_winner, "AUCTION_HAS_NO_WINNER");
+            assert!(
+                compute_asset_winner_commitment(
+                    get_contract_address(), auction_id, recipient, secret,
+                ) == result
+                    .winner_commitment,
+                "INVALID_WINNER_OPENING",
+            );
+
+            auction.fulfillment_status = FulfillmentStatus::Claimed;
+            self.auctions.write(auction_id, auction);
+            self.push_asset(recipient, auction.fulfillment);
+            self.exit();
+            self.emit(AssetClaimed { auction_id, recipient });
+        }
+
+        fn reclaim_asset(ref self: ContractState, auction_id: u64) {
+            self.enter();
+            let mut auction = self.require_escrowed_asset(auction_id);
+            let reclaimable = match auction.status {
+                AuctionStatus::Aborted => true,
+                AuctionStatus::Settled => !self.results.read(auction_id).has_winner,
+                AuctionStatus::Bidding => get_block_timestamp() >= auction.abort_after,
+                AuctionStatus::Unset => false,
+            };
+            assert!(reclaimable, "ASSET_NOT_RECLAIMABLE");
+
+            auction.fulfillment_status = FulfillmentStatus::Reclaimed;
+            self.auctions.write(auction_id, auction);
+            self.push_asset(auction.creator, auction.fulfillment);
+            self.exit();
+            self.emit(AssetReclaimed { auction_id, seller: auction.creator });
+        }
+
         fn get_pool_address(self: @ContractState) -> ContractAddress {
             self.pool_address.read()
+        }
+
+        fn get_asset_winner_payload_domain(self: @ContractState) -> felt252 {
+            ASSET_WINNER_DOMAIN
+        }
+
+        fn compute_asset_winner_commitment(
+            self: @ContractState, auction_id: u64, recipient: ContractAddress, secret: felt252,
+        ) -> felt252 {
+            compute_asset_winner_commitment(get_contract_address(), auction_id, recipient, secret)
         }
 
         fn get_auction(self: @ContractState, auction_id: u64) -> Auction {
@@ -276,8 +379,83 @@ pub mod WhisperAuction {
         }
     }
 
+    #[abi(embed_v0)]
+    impl ERC721ReceiverImpl of IERC721Receiver<ContractState> {
+        fn on_erc721_received(
+            self: @ContractState,
+            operator: ContractAddress,
+            from: ContractAddress,
+            token_id: u256,
+            data: Span<felt252>,
+        ) -> felt252 {
+            let _ = data;
+            assert!(self.locked.read(), "UNSOLICITED_ERC721");
+            assert!(operator == get_contract_address(), "UNEXPECTED_OPERATOR");
+            assert!(self.pending_kind.read() == FulfillmentKind::Erc721, "UNEXPECTED_ASSET_KIND");
+            assert!(get_caller_address() == self.pending_token.read(), "UNEXPECTED_TOKEN");
+            assert!(from == self.pending_seller.read(), "UNEXPECTED_SELLER");
+            assert!(token_id == self.pending_token_id.read(), "UNEXPECTED_TOKEN_ID");
+            IERC721_RECEIVER_ID
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl ERC1155ReceiverImpl of IERC1155Receiver<ContractState> {
+        fn on_erc1155_received(
+            self: @ContractState,
+            operator: ContractAddress,
+            from: ContractAddress,
+            token_id: u256,
+            value: u256,
+            data: Span<felt252>,
+        ) -> felt252 {
+            let _ = data;
+            assert!(self.locked.read(), "UNSOLICITED_ERC1155");
+            assert!(operator == get_contract_address(), "UNEXPECTED_OPERATOR");
+            assert!(self.pending_kind.read() == FulfillmentKind::Erc1155, "UNEXPECTED_ASSET_KIND");
+            assert!(get_caller_address() == self.pending_token.read(), "UNEXPECTED_TOKEN");
+            assert!(from == self.pending_seller.read(), "UNEXPECTED_SELLER");
+            assert!(token_id == self.pending_token_id.read(), "UNEXPECTED_TOKEN_ID");
+            assert!(value == self.pending_amount.read(), "UNEXPECTED_AMOUNT");
+            IERC1155_RECEIVER_ID
+        }
+
+        fn on_erc1155_batch_received(
+            self: @ContractState,
+            operator: ContractAddress,
+            from: ContractAddress,
+            token_ids: Span<u256>,
+            values: Span<u256>,
+            data: Span<felt252>,
+        ) -> felt252 {
+            let _ = operator;
+            let _ = from;
+            let _ = token_ids;
+            let _ = values;
+            let _ = data;
+            panic!("BATCH_NOT_SUPPORTED")
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl SRC5Impl of ISRC5<ContractState> {
+        fn supports_interface(self: @ContractState, interface_id: felt252) -> bool {
+            interface_id == IERC721_RECEIVER_ID || interface_id == IERC1155_RECEIVER_ID
+        }
+    }
+
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        fn enter(ref self: ContractState) {
+            assert!(!self.locked.read(), "REENTRANT_CALL");
+            self.locked.write(true);
+        }
+
+        fn exit(ref self: ContractState) {
+            self.clear_pending_receipt();
+            self.locked.write(false);
+        }
+
         fn assert_pool(self: @ContractState) {
             assert!(get_caller_address() == self.pool_address.read(), "ONLY_POOL");
         }
@@ -286,6 +464,168 @@ pub mod WhisperAuction {
             let auction = self.auctions.read(auction_id);
             assert!(auction.status != AuctionStatus::Unset, "AUCTION_NOT_FOUND");
             auction
+        }
+
+        fn require_escrowed_asset(self: @ContractState, auction_id: u64) -> Auction {
+            let auction = self.require_auction(auction_id);
+            assert!(
+                auction.fulfillment_status == FulfillmentStatus::Escrowed, "ASSET_NOT_ESCROWED",
+            );
+            auction
+        }
+
+        fn initial_fulfillment_status(
+            self: @ContractState, kind: FulfillmentKind,
+        ) -> FulfillmentStatus {
+            match kind {
+                FulfillmentKind::Offchain => FulfillmentStatus::Offchain,
+                FulfillmentKind::Erc20 => FulfillmentStatus::Escrowed,
+                FulfillmentKind::Erc721 => FulfillmentStatus::Escrowed,
+                FulfillmentKind::Erc1155 => FulfillmentStatus::Escrowed,
+            }
+        }
+
+        fn validate_fulfillment(
+            self: @ContractState, fulfillment: AuctionFulfillment, winner_payload_domain: felt252,
+        ) {
+            match fulfillment.kind {
+                FulfillmentKind::Offchain => {
+                    assert!(fulfillment.token.is_zero(), "OFFCHAIN_TOKEN");
+                    assert!(fulfillment.token_id == 0, "OFFCHAIN_TOKEN_ID");
+                    assert!(fulfillment.amount == 0, "OFFCHAIN_AMOUNT");
+                },
+                FulfillmentKind::Erc20 => {
+                    assert!(!fulfillment.token.is_zero(), "ZERO_ASSET_TOKEN");
+                    assert!(fulfillment.token_id == 0, "ERC20_TOKEN_ID");
+                    assert!(fulfillment.amount > 0, "ZERO_ASSET_AMOUNT");
+                    assert!(winner_payload_domain == ASSET_WINNER_DOMAIN, "WRONG_WINNER_DOMAIN");
+                },
+                FulfillmentKind::Erc721 => {
+                    assert!(!fulfillment.token.is_zero(), "ZERO_ASSET_TOKEN");
+                    assert!(fulfillment.amount == 1, "ERC721_AMOUNT");
+                    assert!(winner_payload_domain == ASSET_WINNER_DOMAIN, "WRONG_WINNER_DOMAIN");
+                },
+                FulfillmentKind::Erc1155 => {
+                    assert!(!fulfillment.token.is_zero(), "ZERO_ASSET_TOKEN");
+                    assert!(fulfillment.amount > 0, "ZERO_ASSET_AMOUNT");
+                    assert!(winner_payload_domain == ASSET_WINNER_DOMAIN, "WRONG_WINNER_DOMAIN");
+                },
+            }
+        }
+
+        fn pull_asset(
+            ref self: ContractState, seller: ContractAddress, fulfillment: AuctionFulfillment,
+        ) {
+            let escrow = get_contract_address();
+            match fulfillment.kind {
+                FulfillmentKind::Offchain => {},
+                FulfillmentKind::Erc20 => {
+                    let token = IERC20AssetDispatcher { contract_address: fulfillment.token };
+                    let before = token.balance_of(escrow);
+                    assert!(
+                        token.transfer_from(seller, escrow, fulfillment.amount),
+                        "ERC20_PULL_FAILED",
+                    );
+                    assert!(
+                        token.balance_of(escrow) == before + fulfillment.amount,
+                        "ERC20_AMOUNT_MISMATCH",
+                    );
+                },
+                FulfillmentKind::Erc721 => {
+                    self.set_pending_receipt(seller, fulfillment);
+                    IERC721AssetDispatcher { contract_address: fulfillment.token }
+                        .safe_transfer_from(seller, escrow, fulfillment.token_id, array![].span());
+                    assert!(
+                        IERC721AssetDispatcher { contract_address: fulfillment.token }
+                            .owner_of(fulfillment.token_id) == escrow,
+                        "ERC721_OWNER_MISMATCH",
+                    );
+                    self.clear_pending_receipt();
+                },
+                FulfillmentKind::Erc1155 => {
+                    let token = IERC1155AssetDispatcher { contract_address: fulfillment.token };
+                    let before = token.balance_of(escrow, fulfillment.token_id);
+                    self.set_pending_receipt(seller, fulfillment);
+                    token
+                        .safe_transfer_from(
+                            seller,
+                            escrow,
+                            fulfillment.token_id,
+                            fulfillment.amount,
+                            array![].span(),
+                        );
+                    assert!(
+                        token.balance_of(escrow, fulfillment.token_id) == before
+                            + fulfillment.amount,
+                        "ERC1155_AMOUNT_MISMATCH",
+                    );
+                    self.clear_pending_receipt();
+                },
+            }
+        }
+
+        fn push_asset(
+            ref self: ContractState, recipient: ContractAddress, fulfillment: AuctionFulfillment,
+        ) {
+            let escrow = get_contract_address();
+            match fulfillment.kind {
+                FulfillmentKind::Offchain => panic!("NO_ONCHAIN_ASSET"),
+                FulfillmentKind::Erc20 => {
+                    let token = IERC20AssetDispatcher { contract_address: fulfillment.token };
+                    let before = token.balance_of(recipient);
+                    assert!(token.transfer(recipient, fulfillment.amount), "ERC20_PUSH_FAILED");
+                    assert!(
+                        token.balance_of(recipient) == before + fulfillment.amount,
+                        "ERC20_AMOUNT_MISMATCH",
+                    );
+                },
+                FulfillmentKind::Erc721 => {
+                    IERC721AssetDispatcher { contract_address: fulfillment.token }
+                        .safe_transfer_from(
+                            escrow, recipient, fulfillment.token_id, array![].span(),
+                        );
+                    assert!(
+                        IERC721AssetDispatcher { contract_address: fulfillment.token }
+                            .owner_of(fulfillment.token_id) == recipient,
+                        "ERC721_OWNER_MISMATCH",
+                    );
+                },
+                FulfillmentKind::Erc1155 => {
+                    let token = IERC1155AssetDispatcher { contract_address: fulfillment.token };
+                    let before = token.balance_of(recipient, fulfillment.token_id);
+                    token
+                        .safe_transfer_from(
+                            escrow,
+                            recipient,
+                            fulfillment.token_id,
+                            fulfillment.amount,
+                            array![].span(),
+                        );
+                    assert!(
+                        token.balance_of(recipient, fulfillment.token_id) == before
+                            + fulfillment.amount,
+                        "ERC1155_AMOUNT_MISMATCH",
+                    );
+                },
+            }
+        }
+
+        fn set_pending_receipt(
+            ref self: ContractState, seller: ContractAddress, fulfillment: AuctionFulfillment,
+        ) {
+            self.pending_kind.write(fulfillment.kind);
+            self.pending_token.write(fulfillment.token);
+            self.pending_seller.write(seller);
+            self.pending_token_id.write(fulfillment.token_id);
+            self.pending_amount.write(fulfillment.amount);
+        }
+
+        fn clear_pending_receipt(ref self: ContractState) {
+            self.pending_kind.write(FulfillmentKind::Offchain);
+            self.pending_token.write(0.try_into().unwrap());
+            self.pending_seller.write(0.try_into().unwrap());
+            self.pending_token_id.write(0);
+            self.pending_amount.write(0);
         }
 
         fn assert_operator(self: @ContractState, identity_key: felt252, auction_id: u64) {

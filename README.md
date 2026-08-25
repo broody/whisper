@@ -2,7 +2,7 @@
 
 Whisper is a reusable Cairo and TypeScript library for private, token-agnostic Vickrey auctions on Starknet. Bidders escrow encrypted STRK20 notes, the highest bid wins, and the winner pays the greater of the reserve price and the second-highest bid.
 
-The auction result exposes a generic winner commitment, allowing games, NFT marketplaces, allocation systems, and other applications to define what the winner receives without adding application-specific behavior to the auction contract.
+The auction result exposes a generic winner commitment. Every auction explicitly selects `Offchain`, `ERC20`, `ERC721`, or `ERC1155` fulfillment: applications interpret offchain winners themselves, while `WhisperAuction` escrows a selected token lot before bidding opens and releases it only to the committed winner.
 
 ## Auction model
 
@@ -13,7 +13,8 @@ Each auction defines:
 - bidding, force-reveal, and abort deadlines;
 - an operator-controlled private vault;
 - a private proceeds recipient; and
-- application metadata and a winner-payload domain.
+- application metadata and a winner-payload domain; and
+- an explicit offchain or escrowed ERC-20/ERC-721/ERC-1155 fulfillment descriptor.
 
 Bids contain one or more encrypted-note tranches, an amount commitment for each tranche, a private refund destination, and an application-defined winner commitment. A bidder may increase a logical bid by adding another tranche; settlement sums all funded tranches in the group before pricing. Groups below reserve are fully refunded, and ties are resolved deterministically by the public group handle.
 
@@ -56,6 +57,8 @@ import {
 } from "@whisper-trade/sdk";
 ```
 
+For fulfillment, the SDK also exports `WHISPER_OFFCHAIN_FULFILLMENT`, `WhisperFulfillmentKind`, `encodeWhisperAuctionFulfillment`, and `computeAssetWinnerCommitment`. These helpers mirror the unified Cairo ABI; they do not change the private ERC-20 payment flow.
+
 ## Privacy and custody
 
 Before settlement, bid amounts, bidder wallets, refund destinations, and winner payloads remain hidden from the public and other bidders. The current implementation uses a 1-of-1 operator that controls the vault's viewing and reveal keys, so that operator can decrypt bid amounts as soon as it discovers their notes and capsules. This is an intentional early-stage compromise, not the intended final trust model: Whisper can evolve toward threshold-controlled decryption and vault spending so no single operator can unilaterally decrypt bids or move escrow, followed by stronger deadline-decryption and non-custodial settlement mechanisms as the underlying privacy infrastructure supports them.
@@ -68,7 +71,7 @@ A normal dapp must never handle a user's viewing key, notes, or proofs. It passe
 
 ## Sepolia deployment
 
-The current experimental Sepolia instance is deployed at [`0x05fc…ee5c`](https://sepolia.voyager.online/contract/0x05fc7856d6f64428e001fdf126a17d3b303695d04342195aa9e0c3500de3ee5c) against the canonical Sepolia STRK20 pool. A standard transfer + invoke bid completed the full private-note discovery, acceptance, force-reveal, and proof-backed settlement lifecycle using the official Privacy SDK. An interactive Ready Wallet handoff and additive top-up remain to be tested. Public deployment metadata is recorded in [`deployments/sepolia.json`](deployments/sepolia.json); signing, viewing, and reveal secrets remain outside the repository.
+The current experimental Sepolia v0.3 instance is deployed at [`0x03db…b586`](https://sepolia.voyager.online/contract/0x03db9a75d8f90384e300b32bc4f08e3ac273325fbd18d0ef037a31795cfbb586) against the canonical Sepolia STRK20 pool. An explicit offchain Stake Wars auction completed the standard transfer + invoke private-note discovery, acceptance, force-reveal, and proof-backed settlement lifecycle using the official Privacy SDK. A second auction escrowed exactly 0.01 STRK through the unified ERC-20 fulfillment path and returned it to the seller after timeout. Public deployment metadata and prior deployments are recorded in [`deployments/sepolia.json`](deployments/sepolia.json); signing, viewing, claim, and reveal secrets remain outside the repository.
 
 ## Develop
 

@@ -1,11 +1,18 @@
 import type { WhisperBidOpening, WhisperEncryptedCapsule } from "@whisper-trade/sdk";
 
 export type AuctionStatus = "bidding" | "settled" | "aborted";
+export type FulfillmentKind = "offchain" | "erc20" | "erc721" | "erc1155";
+export type FulfillmentStatus = "offchain" | "escrowed" | "claimed" | "reclaimed";
 
 export interface AuctionView {
   id: bigint;
   paymentToken: bigint;
   proceedsRecipientCommitment: bigint;
+  fulfillmentKind: FulfillmentKind;
+  assetToken: bigint;
+  assetTokenId: bigint;
+  assetAmount: bigint;
+  fulfillmentStatus: FulfillmentStatus;
   reservePrice: bigint;
   forceRevealAfter: number;
   abortAfter: number;

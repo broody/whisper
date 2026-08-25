@@ -16,6 +16,7 @@
   },
   "include": [
     "src/index.ts",
+    "src/fulfillment.ts",
     "src/bid-action.ts",
     "src/capsule.ts",
     "src/hashes.ts",

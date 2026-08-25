@@ -8,6 +8,8 @@ import type {
   AuctionStatus,
   AuctionView,
   BidView,
+  FulfillmentKind,
+  FulfillmentStatus,
   WhisperChainPort,
   WhisperEventBatch,
   WhisperEventSource,
@@ -64,20 +66,25 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
       entrypoint: "get_auction",
       calldata: [hex(auctionId)],
     });
-    if (values.length !== 21) {
+    if (values.length !== 28) {
       throw new Error(`unexpected Whisper Auction response length: ${values.length}`);
     }
     return {
       id: field(values, 0),
       paymentToken: field(values, 2),
       proceedsRecipientCommitment: field(values, 3),
-      reservePrice: field(values, 6),
-      forceRevealAfter: safeNumber("forceRevealAfter", field(values, 9)),
-      abortAfter: safeNumber("abortAfter", field(values, 10)),
-      vaultAddress: field(values, 11),
-      acceptedBidsHash: field(values, 15),
-      bidCount: safeNumber("bidCount", field(values, 17)),
-      status: auctionStatus(field(values, 18)),
+      fulfillmentKind: fulfillmentKind(field(values, 5)),
+      assetToken: field(values, 6),
+      assetTokenId: u256Field(values, 7),
+      assetAmount: u256Field(values, 9),
+      fulfillmentStatus: fulfillmentStatus(field(values, 11)),
+      reservePrice: field(values, 13),
+      forceRevealAfter: safeNumber("forceRevealAfter", field(values, 16)),
+      abortAfter: safeNumber("abortAfter", field(values, 17)),
+      vaultAddress: field(values, 18),
+      acceptedBidsHash: field(values, 22),
+      bidCount: safeNumber("bidCount", field(values, 24)),
+      status: auctionStatus(field(values, 25)),
     };
   }
 
@@ -194,6 +201,36 @@ function auctionStatus(value: bigint): AuctionStatus {
   }
 }
 
+function fulfillmentKind(value: bigint): FulfillmentKind {
+  switch (value) {
+    case 0n:
+      return "offchain";
+    case 1n:
+      return "erc20";
+    case 2n:
+      return "erc721";
+    case 3n:
+      return "erc1155";
+    default:
+      throw new Error(`unexpected fulfillment kind: ${value}`);
+  }
+}
+
+function fulfillmentStatus(value: bigint): FulfillmentStatus {
+  switch (value) {
+    case 0n:
+      return "offchain";
+    case 1n:
+      return "escrowed";
+    case 2n:
+      return "claimed";
+    case 3n:
+      return "reclaimed";
+    default:
+      throw new Error(`unexpected fulfillment status: ${value}`);
+  }
+}
+
 function boolField(name: string, value: bigint): boolean {
   if (value === 0n) return false;
   if (value === 1n) return true;
@@ -202,6 +239,10 @@ function boolField(name: string, value: bigint): boolean {
 
 function field(values: readonly string[], index: number): bigint {
   return BigInt(values[index]!);
+}
+
+function u256Field(values: readonly string[], lowIndex: number): bigint {
+  return field(values, lowIndex) + (field(values, lowIndex + 1) << 128n);
 }
 
 function eventKey(event: RawEvent, index: number, name: string): bigint {

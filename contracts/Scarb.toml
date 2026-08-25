@@ -1,6 +1,6 @@
 [package]
 name = "whisper"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024_07"
 license = "Apache-2.0"
 description = "Whisper private Vickrey auctions for any STRK20-supported ERC-20"

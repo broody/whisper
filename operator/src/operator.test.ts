@@ -181,6 +181,11 @@ function setup(store: OperatorStore = new InMemoryOperatorStore()) {
     id: 7n,
     paymentToken: 0x444n,
     proceedsRecipientCommitment: computeProceedsRecipientCommitment(proceedsRecipient),
+    fulfillmentKind: "offchain",
+    assetToken: 0n,
+    assetTokenId: 0n,
+    assetAmount: 0n,
+    fulfillmentStatus: "offchain",
     reservePrice: 50n,
     forceRevealAfter: 100,
     abortAfter: 300,
@@ -554,7 +559,9 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   const auctionCreatedSelector = hash.getSelectorFromName("AuctionCreated");
   const encNoteCreatedSelector = hash.getSelectorFromName("EncNoteCreated");
   const auctionValues = [
-    7n, 0x1n, 0x444n, 0x555n, 0x6n, 0x7n, 50n, 2n, 90n, 100n, 300n,
+    7n, 0x1n, 0x444n, 0x555n, 0x6n,
+    0n, 0n, 0n, 0n, 0n, 0n, 0n,
+    0x7n, 50n, 2n, 90n, 100n, 300n,
     0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 2n, 2n, 1n, 0n, 0n,
   ].map(hex);
   const bid = (handle: bigint, noteId: bigint) =>
@@ -621,6 +628,7 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   const candidates = await chain.candidateVaultNoteIds("0xbbb", 0x333n, 0x444n);
 
   assert.equal(auction.status, "bidding");
+  assert.equal(auction.fulfillmentKind, "offchain");
   assert.equal(auction.bidCount, 2);
   assert.deepEqual(bids.map((value) => value.bidHandle), [10n, 20n]);
   assert.deepEqual(bids.map((value) => value.groupHandle), [110n, 120n]);
@@ -658,6 +666,11 @@ test("scans finalized events into durable worker state and schedules ready aucti
       id: 7n,
       paymentToken: 0x444n,
       proceedsRecipientCommitment: 0x555n,
+      fulfillmentKind: "offchain" as const,
+      assetToken: 0n,
+      assetTokenId: 0n,
+      assetAmount: 0n,
+      fulfillmentStatus: "offchain" as const,
       reservePrice: 50n,
       forceRevealAfter: 100,
       abortAfter: 300,

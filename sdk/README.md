@@ -108,6 +108,38 @@ import {
 
 These builders serialize the three operator-only Cairo `PrivacyRequest` variants exactly: accept `0`, settle `1`, and abort `2`. Bid submission has a separate Wallet API-compatible request enum: submit `0` and add tranche `1`.
 
+## Auction fulfillment
+
+Every auction explicitly selects offchain or token fulfillment. Stake Wars uses the zeroed offchain descriptor; ERC-20, ERC-721, and ERC-1155 auctions approve and deposit their lot directly into `WhisperAuction` during creation:
+
+```ts
+import {
+  WHISPER_ASSET_WINNER_DOMAIN,
+  WHISPER_OFFCHAIN_FULFILLMENT,
+  WhisperFulfillmentKind,
+  computeAssetWinnerCommitment,
+  encodeWhisperAuctionFulfillment,
+} from "@whisper-trade/sdk";
+
+const offchain = encodeWhisperAuctionFulfillment(WHISPER_OFFCHAIN_FULFILLMENT);
+
+const erc721 = encodeWhisperAuctionFulfillment({
+  kind: WhisperFulfillmentKind.Erc721,
+  token: collectionAddress,
+  tokenId,
+  amount: 1n,
+});
+
+const winnerCommitment = computeAssetWinnerCommitment({
+  whisperAddress,
+  auctionId,
+  recipient,
+  secret,
+});
+```
+
+Put the six encoded values into `AuctionConfig.fulfillment`. Token variants use `WHISPER_ASSET_WINNER_DOMAIN`; the winner keeps `secret` private until calling `claim_asset`. Offchain auctions retain their application-defined winner domain and do not use the asset-claim commitment.
+
 ## Security boundary
 
 The canonical pool proves that the vault controls consumed notes and that its private batch conserves value. Whisper verifies the public bid openings and Vickrey result. The current protocol does not cryptographically bind a submitted note's hidden token/amount to its bid or enforce the recipients and values represented by `outputsRoot`; the operator remains a custodian.

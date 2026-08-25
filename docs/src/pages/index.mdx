@@ -67,6 +67,6 @@ The 1-of-1 operator is different: it can decrypt bid amounts as notes arrive, co
 
 ## Scope
 
-The Cairo package is application-neutral. A game can interpret `winner_commitment` as control of an arbiter, a marketplace can interpret it as a delivery identity, and an NFT adapter can use it to identify the private winner. Whisper only decides which committed bid wins and what it pays.
+The Cairo package is application-neutral. Every auction explicitly selects offchain, ERC-20, ERC-721, or ERC-1155 fulfillment: a game can interpret `winner_commitment` as control of an arbiter, while Whisper can escrow a token lot for delivery to the committed winner. [Read the fulfillment model](/auctions/fulfillment).
 
 For the underlying pool model, see [What is STRK20](https://strk20-by-example.org/what-is-strk20), [notes and nullifiers](https://strk20-by-example.org/notes-and-nullifiers), and [actions and proofs](https://strk20-by-example.org/actions-and-proofs).

@@ -1,4 +1,5 @@
 use starknet::ContractAddress;
+use crate::asset_types::{AuctionFulfillment, FulfillmentStatus};
 
 #[derive(Copy, Drop, Serde, Debug, PartialEq, starknet::Store)]
 pub enum AuctionStatus {
@@ -14,6 +15,7 @@ pub struct AuctionConfig {
     pub payment_token: ContractAddress,
     pub proceeds_recipient_commitment: felt252,
     pub metadata_hash: felt252,
+    pub fulfillment: AuctionFulfillment,
     pub winner_payload_domain: felt252,
     pub reserve_price: u128,
     pub max_bids: u32,
@@ -37,6 +39,8 @@ pub struct Auction {
     pub payment_token: ContractAddress,
     pub proceeds_recipient_commitment: felt252,
     pub metadata_hash: felt252,
+    pub fulfillment: AuctionFulfillment,
+    pub fulfillment_status: FulfillmentStatus,
     pub winner_payload_domain: felt252,
     pub reserve_price: u128,
     pub max_bids: u32,

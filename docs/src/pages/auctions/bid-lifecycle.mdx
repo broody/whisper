@@ -150,6 +150,8 @@ Whisper deliberately does not define the prize. `winner_commitment` can represen
 
 The consumer decides how to verify or redeem that commitment. Whisper only publishes the commitment belonging to the verified winning bid.
 
+Stake Wars selects the explicit `Offchain` kind for controller fulfillment. ERC-20, ERC-721, and ERC-1155 auctions select the matching kind in the same creation interface; Whisper deposits the token before opening the auction and verifies a domain-separated recipient/secret opening after settlement. See [Auction fulfillment](/auctions/fulfillment).
+
 ## Abort and recovery
 
 After `abort_after`, the operator can submit `PrivacyRequest::Abort` with a non-zero `recovery_hash`. This records a commitment to an external recovery or refund manifest.
