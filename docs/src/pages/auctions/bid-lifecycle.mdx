@@ -11,7 +11,9 @@ Whisper separates **submission** from **funding**. A wallet can atomically trans
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Bidding: create auction
+  [*] --> Bidding: create with Absolute schedule
+  [*] --> Pending: create with StartOnBid schedule
+  Pending --> Bidding: first successful bid
   Bidding --> Bidding: submit unfunded tranche
   Bidding --> Bidding: accept funded tranche
   Bidding --> Settled: settle in reveal window
@@ -20,7 +22,7 @@ stateDiagram-v2
   Aborted --> [*]
 ```
 
-`Settled` and `Aborted` are terminal. The contract does not have a bidder-driven reclaim state because bidders do not own the vault notes after transferring them.
+`Pending` means a start-on-bid auction has not received its first bid and has no resolved deadlines yet. `Settled` and `Aborted` are terminal. The contract does not have a bidder-driven reclaim state because bidders do not own the vault notes after transferring them.
 
 ## Bid state
 
@@ -59,7 +61,7 @@ refund_commitment
 winner_commitment
 ```
 
-The dapp passes both actions to `strk20InvokeTransaction(actions)`. The compatible wallet selects private inputs, generates the proof, and relays the atomic pool transaction. Whisper derives a random-nonce-based `group_handle` and its first `bid_handle`, stores the tranche as unfunded, and emits `BidSubmitted`.
+The dapp passes both actions to `strk20InvokeTransaction(actions)`. The compatible wallet selects private inputs, generates the proof, and relays the atomic pool transaction. For a pending start-on-bid auction, this successful transaction first resolves the deadlines and emits `AuctionStarted`. Whisper then derives a random-nonce-based `group_handle` and its first `bid_handle`, stores the tranche as unfunded, and emits `BidSubmitted`.
 
 No maximum bid appears in that request.
 
@@ -85,10 +87,19 @@ The ordered set has a rolling `accepted_bids_hash`. Settlement must use that sam
 
 ## Deadlines and grace period
 
+Creation selects one of two schedule variants:
+
+| Schedule | Configuration | Initial state |
+|---|---|---|
+| `Absolute` | Three absolute chain timestamps | `Bidding`; `started_at` is creation time |
+| `StartOnBid` | Bidding, acceptance, and settlement durations | `Pending`; `started_at` and resolved deadlines are zero |
+
+On the first successful bid, `StartOnBid` uses the bid transaction's block timestamp as `started_at`. It adds `bidding_duration`, then `acceptance_duration`, then `settlement_duration` to derive the public deadlines. Later bids never extend them.
+
 ```mermaid
 timeline
   title Auction timing
-  Auction created : submissions open
+  Auction started : creation for Absolute : first bid for StartOnBid
   bidding_deadline : new submissions close
   Grace period : note discovery and acceptance continue
   force_reveal_after : acceptance closes : settlement opens
@@ -96,6 +107,8 @@ timeline
 ```
 
 The grace period must be long enough for the submitted transaction to be indexed and for the note to become usable in the eventual settlement. A zero-match discovery result is treated as retryable before the acceptance deadline; multiple matching vault notes in one submission transaction are rejected as ambiguous.
+
+A pending auction cannot settle, abort, or release an escrowed asset. There is no creator-cancel path yet, so an escrowed lot remains locked if a start-on-bid auction never receives a bid.
 
 ## Force reveal
 

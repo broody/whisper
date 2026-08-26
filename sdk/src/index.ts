@@ -50,3 +50,8 @@ export {
   type WhisperAssetWinnerOpening,
   type WhisperFulfillmentKindValue,
 } from "./fulfillment.js";
+export {
+  WhisperAuctionScheduleKind,
+  encodeWhisperAuctionSchedule,
+  type WhisperAuctionSchedule,
+} from "./schedule.js";

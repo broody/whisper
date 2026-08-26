@@ -20,6 +20,7 @@
     "src/bid-action.ts",
     "src/capsule.ts",
     "src/hashes.ts",
-    "src/operator-actions.ts"
+    "src/operator-actions.ts",
+    "src/schedule.ts"
   ]
 }

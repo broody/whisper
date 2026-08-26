@@ -27,8 +27,9 @@ use crate::test_tokens::{
     IMockWhisperUpgradeV2DispatcherTrait,
 };
 use crate::types::{
-    AbortInput, AcceptBidInput, AuctionConfig, AuctionStatus, BidIntent, BidTopUpIntent,
-    PrivacyRequest, RevealedBid, SettlementInput, WalletBidRequest,
+    AbortInput, AbsoluteAuctionSchedule, AcceptBidInput, AuctionConfig, AuctionSchedule,
+    AuctionStatus, BidIntent, BidTopUpIntent, PrivacyRequest, RevealedBid, SettlementInput,
+    StartOnBidAuctionSchedule, WalletBidRequest,
 };
 
 const RESERVE_PRICE: u128 = 10;
@@ -65,14 +66,30 @@ fn config(token: ContractAddress) -> AuctionConfig {
         winner_payload_domain: 0x303,
         reserve_price: RESERVE_PRICE,
         max_bids: 16,
-        bidding_deadline: BID_DEADLINE,
-        force_reveal_after: REVEAL_AFTER,
-        abort_after: ABORT_AFTER,
+        schedule: AuctionSchedule::Absolute(
+            AbsoluteAuctionSchedule {
+                bidding_deadline: BID_DEADLINE,
+                force_reveal_after: REVEAL_AFTER,
+                abort_after: ABORT_AFTER,
+            },
+        ),
         vault_address: address(0x400),
         vault_public_key: 0x401,
         reveal_public_key: 0x402,
         operator_identity_commitment: compute_operator_identity_commitment(OPERATOR_IDENTITY_KEY),
     }
+}
+
+fn start_on_bid_config(token: ContractAddress) -> AuctionConfig {
+    let mut result = config(token);
+    result
+        .schedule =
+            AuctionSchedule::StartOnBid(
+                StartOnBidAuctionSchedule {
+                    bidding_duration: 100, acceptance_duration: 20, settlement_duration: 80,
+                },
+            );
+    result
 }
 
 fn deploy_with_owner(owner: ContractAddress) -> IWhisperAuctionDispatcher {
@@ -475,9 +492,95 @@ fn rejects_auction_capacity_above_supported_limit() {
 fn rejects_auction_without_post_bid_grace_period() {
     let auction = deploy();
     let mut invalid = config(address(0x501));
-    invalid.force_reveal_after = invalid.bidding_deadline;
+    invalid
+        .schedule =
+            AuctionSchedule::Absolute(
+                AbsoluteAuctionSchedule {
+                    bidding_deadline: BID_DEADLINE,
+                    force_reveal_after: BID_DEADLINE,
+                    abort_after: ABORT_AFTER,
+                },
+            );
     set_context(auction, 100, creator_address());
     auction.create_auction(invalid);
+}
+
+#[test]
+fn start_on_bid_resolves_deadlines_from_first_bid() {
+    let auction = deploy();
+    set_context(auction, 100, creator_address());
+    let auction_id = auction.create_auction(start_on_bid_config(address(0x501)));
+    let pending = auction.get_auction(auction_id);
+    assert_eq!(pending.status, AuctionStatus::Pending);
+    assert_eq!(pending.started_at, 0);
+    assert_eq!(pending.bidding_deadline, 0);
+    assert_eq!(pending.force_reveal_after, 0);
+    assert_eq!(pending.abort_after, 0);
+
+    submit_bid(auction, auction_id, 0xabc, 0x704, 30, 0x705);
+    let started = auction.get_auction(auction_id);
+    assert_eq!(started.status, AuctionStatus::Bidding);
+    assert_eq!(started.started_at, 150);
+    assert_eq!(started.bidding_deadline, 250);
+    assert_eq!(started.force_reveal_after, 270);
+    assert_eq!(started.abort_after, 350);
+
+    set_context(auction, 200, pool_address());
+    wallet_bid(auction)
+        .privacy_invoke(
+            WalletBidRequest::SubmitBid(bid_intent(auction_id, 0xdef, 0x706, 31, 0x707)),
+        );
+    let unchanged = auction.get_auction(auction_id);
+    assert_eq!(unchanged.started_at, 150);
+    assert_eq!(unchanged.bidding_deadline, 250);
+    assert_eq!(unchanged.force_reveal_after, 270);
+    assert_eq!(unchanged.abort_after, 350);
+}
+
+#[test]
+#[should_panic(expected: "ZERO_ACCEPTANCE_DURATION")]
+fn rejects_start_on_bid_without_acceptance_period() {
+    let auction = deploy();
+    let mut invalid = start_on_bid_config(address(0x501));
+    invalid
+        .schedule =
+            AuctionSchedule::StartOnBid(
+                StartOnBidAuctionSchedule {
+                    bidding_duration: 100, acceptance_duration: 0, settlement_duration: 80,
+                },
+            );
+    set_context(auction, 100, creator_address());
+    auction.create_auction(invalid);
+}
+
+#[test]
+#[should_panic(expected: "BIDDING_CLOSED")]
+fn rejects_later_bid_at_resolved_bidding_deadline() {
+    let auction = deploy();
+    set_context(auction, 100, creator_address());
+    let auction_id = auction.create_auction(start_on_bid_config(address(0x501)));
+    submit_bid(auction, auction_id, 0xabc, 0x704, 30, 0x705);
+    set_context(auction, 250, pool_address());
+    wallet_bid(auction)
+        .privacy_invoke(
+            WalletBidRequest::SubmitBid(bid_intent(auction_id, 0xdef, 0x706, 31, 0x707)),
+        );
+}
+
+#[test]
+#[should_panic(expected: "AUCTION_NOT_STARTED")]
+fn rejects_abort_before_first_bid() {
+    let auction = deploy();
+    set_context(auction, 100, creator_address());
+    let auction_id = auction.create_auction(start_on_bid_config(address(0x501)));
+    set_context(auction, 1_000, address(0x999));
+    let command = privacy(auction)
+        .privacy_compute(
+            OPERATOR_IDENTITY_KEY,
+            PrivacyRequest::Abort(AbortInput { auction_id, recovery_hash: 0xa01 }),
+        );
+    set_context(auction, 1_000, pool_address());
+    privacy(auction).privacy_invoke_with_computation(command);
 }
 
 #[test]

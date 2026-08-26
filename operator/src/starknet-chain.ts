@@ -5,6 +5,7 @@ import {
 } from "starknet";
 
 import type {
+  AuctionSchedule,
   AuctionStatus,
   AuctionView,
   BidView,
@@ -66,7 +67,7 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
       entrypoint: "get_auction",
       calldata: [hex(auctionId)],
     });
-    if (values.length !== 28) {
+    if (values.length !== 33) {
       throw new Error(`unexpected Whisper Auction response length: ${values.length}`);
     }
     return {
@@ -79,12 +80,20 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
       assetAmount: u256Field(values, 9),
       fulfillmentStatus: fulfillmentStatus(field(values, 11)),
       reservePrice: field(values, 13),
-      forceRevealAfter: safeNumber("forceRevealAfter", field(values, 16)),
-      abortAfter: safeNumber("abortAfter", field(values, 17)),
-      vaultAddress: field(values, 18),
-      acceptedBidsHash: field(values, 22),
-      bidCount: safeNumber("bidCount", field(values, 24)),
-      status: auctionStatus(field(values, 25)),
+      schedule: auctionSchedule(
+        field(values, 15),
+        field(values, 16),
+        field(values, 17),
+        field(values, 18),
+      ),
+      startedAt: safeNumber("startedAt", field(values, 19)),
+      biddingDeadline: safeNumber("biddingDeadline", field(values, 20)),
+      forceRevealAfter: safeNumber("forceRevealAfter", field(values, 21)),
+      abortAfter: safeNumber("abortAfter", field(values, 22)),
+      vaultAddress: field(values, 23),
+      acceptedBidsHash: field(values, 27),
+      bidCount: safeNumber("bidCount", field(values, 29)),
+      status: auctionStatus(field(values, 30)),
     };
   }
 
@@ -188,13 +197,41 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
   }
 }
 
+function auctionSchedule(
+  kind: bigint,
+  first: bigint,
+  second: bigint,
+  third: bigint,
+): AuctionSchedule {
+  switch (kind) {
+    case 0n:
+      return {
+        kind: "absolute",
+        biddingDeadline: safeNumber("schedule.biddingDeadline", first),
+        forceRevealAfter: safeNumber("schedule.forceRevealAfter", second),
+        abortAfter: safeNumber("schedule.abortAfter", third),
+      };
+    case 1n:
+      return {
+        kind: "start-on-bid",
+        biddingDuration: safeNumber("schedule.biddingDuration", first),
+        acceptanceDuration: safeNumber("schedule.acceptanceDuration", second),
+        settlementDuration: safeNumber("schedule.settlementDuration", third),
+      };
+    default:
+      throw new Error(`unexpected auction schedule: ${kind}`);
+  }
+}
+
 function auctionStatus(value: bigint): AuctionStatus {
   switch (value) {
     case 1n:
-      return "bidding";
+      return "pending";
     case 2n:
-      return "settled";
+      return "bidding";
     case 3n:
+      return "settled";
+    case 4n:
       return "aborted";
     default:
       throw new Error(`unexpected auction status: ${value}`);

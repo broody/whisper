@@ -160,8 +160,9 @@ Only after validation should the caller start `listen()` and `worker.run(signal)
 
 ## Scheduling settlement
 
-Each worker pass loads all tracked auctions. For a still-bidding auction:
+Each worker pass loads all tracked auctions:
 
+- while a start-on-bid auction is `Pending`, it waits for the first submission;
 - before `force_reveal_after`, it waits;
 - from `force_reveal_after` until `abort_after`, it attempts settlement; and
 - after `abort_after`, normal settlement is no longer submitted.

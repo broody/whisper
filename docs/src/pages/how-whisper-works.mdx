@@ -207,7 +207,9 @@ To increase a bid, the dapp creates a fresh amount opening and capsule, then cal
 
 The new note is a separate tranche. Settlement adds all funded tranche amounts in the group: 50 followed by 30 becomes one 80-token bid. Earlier tranches cannot be reduced or reclaimed before settlement, and the public can see the top-up link and timing even though it cannot see the amount.
 
-## 9. The three deadlines
+## 9. Auction start and the three deadlines
+
+The creator chooses an `Absolute` schedule with three chain timestamps or a `StartOnBid` schedule with bidding, acceptance, and settlement durations. Absolute auctions start at creation. Start-on-bid auctions remain `Pending` until the first successful bid atomically sets `started_at`, derives all three deadlines, and changes the status to `Bidding`. Later bids cannot extend the schedule.
 
 | Deadline | Meaning |
 |---|---|
@@ -216,6 +218,8 @@ The new note is a separate tranche. Settlement adds all funded tranche amounts i
 | `abort_after` | Normal settlement has expired; the operator may record an abort/recovery commitment |
 
 The gap between bidding and force reveal is an acceptance grace period. It gives the discovery indexer time to expose notes submitted near the bidding deadline.
+
+Before a start-on-bid auction begins, its resolved deadlines are zero and it cannot settle, abort, or release an escrowed lot. There is currently no creator-cancel path for a pending auction.
 
 “Force reveal” does not mean every bidder must return and reveal. The 1-of-1 operator already holds encrypted capsules and vault notes, so it can complete settlement without another bidder transaction.
 

@@ -108,6 +108,33 @@ import {
 
 These builders serialize the three operator-only Cairo `PrivacyRequest` variants exactly: accept `0`, settle `1`, and abort `2`. Bid submission has a separate Wallet API-compatible request enum: submit `0` and add tranche `1`.
 
+## Auction scheduling
+
+Auction creation chooses either absolute chain timestamps or durations anchored to the first successful bid:
+
+```ts
+import {
+  WhisperAuctionScheduleKind,
+  encodeWhisperAuctionSchedule,
+} from "@whisper-trade/sdk";
+
+const absolute = encodeWhisperAuctionSchedule({
+  kind: WhisperAuctionScheduleKind.Absolute,
+  biddingDeadline,
+  forceRevealAfter,
+  abortAfter,
+});
+
+const startOnBid = encodeWhisperAuctionSchedule({
+  kind: WhisperAuctionScheduleKind.StartOnBid,
+  biddingDuration: 300n,
+  acceptanceDuration: 180n,
+  settlementDuration: 1_320n,
+});
+```
+
+Put the four encoded values into `AuctionConfig.schedule`. An absolute auction starts at creation. A start-on-bid auction is `Pending` with zero resolved deadlines until its first successful bid starts it atomically.
+
 ## Auction fulfillment
 
 Every auction explicitly selects offchain or token fulfillment. Stake Wars uses the zeroed offchain descriptor; ERC-20, ERC-721, and ERC-1155 auctions approve and deposit their lot directly into `WhisperAuction` during creation:

@@ -5,9 +5,36 @@ use crate::asset_types::{AuctionFulfillment, FulfillmentStatus};
 pub enum AuctionStatus {
     #[default]
     Unset,
+    Pending,
     Bidding,
     Settled,
     Aborted,
+}
+
+#[derive(Copy, Drop, Serde, Debug, PartialEq, starknet::Store)]
+pub struct AbsoluteAuctionSchedule {
+    pub bidding_deadline: u64,
+    pub force_reveal_after: u64,
+    pub abort_after: u64,
+}
+
+#[derive(Copy, Drop, Serde, Debug, PartialEq, starknet::Store)]
+pub struct StartOnBidAuctionSchedule {
+    /// Time from the first bid until new submissions close.
+    pub bidding_duration: u64,
+    /// Time after bidding closes for the operator to accept submitted notes.
+    pub acceptance_duration: u64,
+    /// Time after force reveal opens until normal settlement expires.
+    pub settlement_duration: u64,
+}
+
+/// Selects whether an auction opens immediately against absolute timestamps or
+/// resolves its timestamps from the block time of the first successful bid.
+#[derive(Copy, Drop, Serde, Debug, PartialEq, starknet::Store)]
+pub enum AuctionSchedule {
+    #[default]
+    Absolute: AbsoluteAuctionSchedule,
+    StartOnBid: StartOnBidAuctionSchedule,
 }
 
 #[derive(Copy, Drop, Serde, Debug, PartialEq)]
@@ -19,9 +46,7 @@ pub struct AuctionConfig {
     pub winner_payload_domain: felt252,
     pub reserve_price: u128,
     pub max_bids: u32,
-    pub bidding_deadline: u64,
-    pub force_reveal_after: u64,
-    pub abort_after: u64,
+    pub schedule: AuctionSchedule,
     pub vault_address: ContractAddress,
     pub vault_public_key: felt252,
     /// Application-layer encryption key for the bid reveal capsule. This must
@@ -44,6 +69,10 @@ pub struct Auction {
     pub winner_payload_domain: felt252,
     pub reserve_price: u128,
     pub max_bids: u32,
+    pub schedule: AuctionSchedule,
+    /// Creation time for absolute auctions, or first-bid time for start-on-bid auctions.
+    pub started_at: u64,
+    /// Resolved timestamps. All three are zero until a start-on-bid auction receives a bid.
     pub bidding_deadline: u64,
     pub force_reveal_after: u64,
     pub abort_after: u64,

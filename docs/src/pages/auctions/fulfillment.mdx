@@ -40,6 +40,7 @@ The winning bidder computes `winner_commitment` with `computeAssetWinnerCommitme
 
 | Whisper state | Escrow result |
 |---|---|
+| Pending start-on-bid auction | Lot remains escrowed; no creator-cancel path exists yet |
 | Settled with winner | Only the committed recipient can receive the lot; no seller clawback |
 | Settled without winner | Lot is returnable to the auction creator |
 | Aborted | Lot is returnable to the auction creator |

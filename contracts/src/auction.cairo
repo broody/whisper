@@ -29,9 +29,9 @@ pub mod WhisperAuction {
     };
     use crate::pricing::compute_vickrey_price;
     use crate::types::{
-        AbortInput, AcceptBidInput, Auction, AuctionConfig, AuctionResult, AuctionStatus, BidGroup,
-        BidIntent, BidSubmission, BidTopUpIntent, OpenNoteDeposit, PrivacyCommand, PrivacyRequest,
-        RevealedBid, SealedBid, SettlementInput, WalletBidRequest,
+        AbortInput, AcceptBidInput, Auction, AuctionConfig, AuctionResult, AuctionSchedule,
+        AuctionStatus, BidGroup, BidIntent, BidSubmission, BidTopUpIntent, OpenNoteDeposit,
+        PrivacyCommand, PrivacyRequest, RevealedBid, SealedBid, SettlementInput, WalletBidRequest,
     };
 
     component!(path: OwnableComponent, storage: ownable, event: OwnableEvent);
@@ -75,6 +75,7 @@ pub mod WhisperAuction {
     #[derive(Drop, starknet::Event)]
     enum Event {
         AuctionCreated: AuctionCreated,
+        AuctionStarted: AuctionStarted,
         BidSubmitted: BidSubmitted,
         BidFunded: BidFunded,
         BidRevealed: BidRevealed,
@@ -102,12 +103,24 @@ pub mod WhisperAuction {
         asset_amount: u256,
         reserve_price: u128,
         max_bids: u32,
+        schedule: AuctionSchedule,
+        started_at: u64,
         bidding_deadline: u64,
         force_reveal_after: u64,
         abort_after: u64,
         vault_address: ContractAddress,
         reveal_public_key: felt252,
         operator_identity_commitment: felt252,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    struct AuctionStarted {
+        #[key]
+        auction_id: u64,
+        started_at: u64,
+        bidding_deadline: u64,
+        force_reveal_after: u64,
+        abort_after: u64,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -205,9 +218,6 @@ pub mod WhisperAuction {
             assert!(config.winner_payload_domain.is_non_zero(), "ZERO_WINNER_DOMAIN");
             assert!(config.max_bids.is_non_zero(), "ZERO_MAX_BIDS");
             assert!(config.max_bids <= MAX_SUPPORTED_BIDS, "MAX_BIDS_TOO_HIGH");
-            assert!(config.bidding_deadline > now, "INVALID_BID_DEADLINE");
-            assert!(config.force_reveal_after > config.bidding_deadline, "INVALID_REVEAL_TIME");
-            assert!(config.abort_after > config.force_reveal_after, "INVALID_ABORT_TIME");
             assert!(!config.vault_address.is_zero(), "ZERO_VAULT");
             assert!(config.vault_public_key.is_non_zero(), "ZERO_VAULT_KEY");
             assert!(config.reveal_public_key.is_non_zero(), "ZERO_REVEAL_KEY");
@@ -215,6 +225,8 @@ pub mod WhisperAuction {
 
             let auction_id = self.next_auction_id.read();
             let creator = get_caller_address();
+            let (status, started_at, bidding_deadline, force_reveal_after, abort_after) = self
+                .initialize_schedule(config.schedule, now);
             self.validate_fulfillment(config.fulfillment, config.winner_payload_domain);
             self.pull_asset(creator, config.fulfillment);
             self.next_auction_id.write(auction_id + 1);
@@ -229,9 +241,11 @@ pub mod WhisperAuction {
                 winner_payload_domain: config.winner_payload_domain,
                 reserve_price: config.reserve_price,
                 max_bids: config.max_bids,
-                bidding_deadline: config.bidding_deadline,
-                force_reveal_after: config.force_reveal_after,
-                abort_after: config.abort_after,
+                schedule: config.schedule,
+                started_at,
+                bidding_deadline,
+                force_reveal_after,
+                abort_after,
                 vault_address: config.vault_address,
                 vault_public_key: config.vault_public_key,
                 reveal_public_key: config.reveal_public_key,
@@ -242,7 +256,7 @@ pub mod WhisperAuction {
                     .finalize(),
                 submission_count: 0,
                 bid_count: 0,
-                status: AuctionStatus::Bidding,
+                status,
                 settlement_hash: 0,
                 recovery_hash: 0,
             };
@@ -261,9 +275,11 @@ pub mod WhisperAuction {
                         asset_amount: config.fulfillment.amount,
                         reserve_price: config.reserve_price,
                         max_bids: config.max_bids,
-                        bidding_deadline: config.bidding_deadline,
-                        force_reveal_after: config.force_reveal_after,
-                        abort_after: config.abort_after,
+                        schedule: config.schedule,
+                        started_at,
+                        bidding_deadline,
+                        force_reveal_after,
+                        abort_after,
                         vault_address: config.vault_address,
                         reveal_public_key: config.reveal_public_key,
                         operator_identity_commitment: config.operator_identity_commitment,
@@ -305,6 +321,7 @@ pub mod WhisperAuction {
                 AuctionStatus::Aborted => true,
                 AuctionStatus::Settled => !self.results.read(auction_id).has_winner,
                 AuctionStatus::Bidding => get_block_timestamp() >= auction.abort_after,
+                AuctionStatus::Pending => false,
                 AuctionStatus::Unset => false,
             };
             assert!(reclaimable, "ASSET_NOT_RECLAIMABLE");
@@ -513,6 +530,33 @@ pub mod WhisperAuction {
                 FulfillmentKind::Erc20 => FulfillmentStatus::Escrowed,
                 FulfillmentKind::Erc721 => FulfillmentStatus::Escrowed,
                 FulfillmentKind::Erc1155 => FulfillmentStatus::Escrowed,
+            }
+        }
+
+        fn initialize_schedule(
+            self: @ContractState, schedule: AuctionSchedule, now: u64,
+        ) -> (AuctionStatus, u64, u64, u64, u64) {
+            match schedule {
+                AuctionSchedule::Absolute(timing) => {
+                    assert!(timing.bidding_deadline > now, "INVALID_BID_DEADLINE");
+                    assert!(
+                        timing.force_reveal_after > timing.bidding_deadline, "INVALID_REVEAL_TIME",
+                    );
+                    assert!(timing.abort_after > timing.force_reveal_after, "INVALID_ABORT_TIME");
+                    (
+                        AuctionStatus::Bidding,
+                        now,
+                        timing.bidding_deadline,
+                        timing.force_reveal_after,
+                        timing.abort_after,
+                    )
+                },
+                AuctionSchedule::StartOnBid(periods) => {
+                    assert!(periods.bidding_duration.is_non_zero(), "ZERO_BIDDING_DURATION");
+                    assert!(periods.acceptance_duration.is_non_zero(), "ZERO_ACCEPTANCE_DURATION");
+                    assert!(periods.settlement_duration.is_non_zero(), "ZERO_SETTLEMENT_DURATION");
+                    (AuctionStatus::Pending, 0, 0, 0, 0)
+                },
             }
         }
 
@@ -740,8 +784,46 @@ pub mod WhisperAuction {
 
         fn record_bid_submission(ref self: ContractState, bid: BidSubmission) {
             let mut auction = self.require_auction(bid.auction_id);
-            assert!(auction.status == AuctionStatus::Bidding, "NOT_BIDDING");
-            assert!(get_block_timestamp() < auction.bidding_deadline, "BIDDING_CLOSED");
+            assert!(
+                auction.status == AuctionStatus::Pending
+                    || auction.status == AuctionStatus::Bidding,
+                "NOT_BIDDING",
+            );
+            let now = get_block_timestamp();
+            if auction.status == AuctionStatus::Pending {
+                assert!(auction.started_at.is_zero(), "INVALID_START_STATE");
+                let periods = match auction.schedule {
+                    AuctionSchedule::StartOnBid(periods) => periods,
+                    AuctionSchedule::Absolute(_) => panic!("INVALID_START_STATE"),
+                };
+                auction.status = AuctionStatus::Bidding;
+                auction.started_at = now;
+                auction
+                    .bidding_deadline = now
+                    .checked_add(periods.bidding_duration)
+                    .expect('SCHEDULE_OVERFLOW');
+                auction
+                    .force_reveal_after = auction
+                    .bidding_deadline
+                    .checked_add(periods.acceptance_duration)
+                    .expect('SCHEDULE_OVERFLOW');
+                auction
+                    .abort_after = auction
+                    .force_reveal_after
+                    .checked_add(periods.settlement_duration)
+                    .expect('SCHEDULE_OVERFLOW');
+                self
+                    .emit(
+                        AuctionStarted {
+                            auction_id: bid.auction_id,
+                            started_at: auction.started_at,
+                            bidding_deadline: auction.bidding_deadline,
+                            force_reveal_after: auction.force_reveal_after,
+                            abort_after: auction.abort_after,
+                        },
+                    );
+            }
+            assert!(now < auction.bidding_deadline, "BIDDING_CLOSED");
             assert!(bid.bid_handle.is_non_zero(), "ZERO_BID_HANDLE");
             assert!(bid.group_handle.is_non_zero(), "ZERO_GROUP_HANDLE");
             assert!(bid.reveal_commitment.is_non_zero(), "ZERO_REVEAL_COMMITMENT");
@@ -789,6 +871,7 @@ pub mod WhisperAuction {
 
         fn accept_funded_bid(ref self: ContractState, input: AcceptBidInput) {
             let mut auction = self.require_auction(input.auction_id);
+            assert!(auction.status != AuctionStatus::Pending, "AUCTION_NOT_STARTED");
             assert!(auction.status == AuctionStatus::Bidding, "NOT_BIDDING");
             assert!(get_block_timestamp() < auction.force_reveal_after, "ACCEPTANCE_CLOSED");
             assert!(auction.bid_count < auction.max_bids, "MAX_BIDS_REACHED");
@@ -838,6 +921,7 @@ pub mod WhisperAuction {
             } = input;
             let mut auction = self.require_auction(auction_id);
             let now = get_block_timestamp();
+            assert!(auction.status != AuctionStatus::Pending, "AUCTION_NOT_STARTED");
             assert!(auction.status == AuctionStatus::Bidding, "NOT_SETTLEABLE");
             assert!(now >= auction.force_reveal_after, "REVEAL_TOO_EARLY");
             assert!(now < auction.abort_after, "SETTLEMENT_EXPIRED");
@@ -970,6 +1054,7 @@ pub mod WhisperAuction {
 
         fn abort_auction(ref self: ContractState, input: AbortInput) {
             let mut auction = self.require_auction(input.auction_id);
+            assert!(auction.status != AuctionStatus::Pending, "AUCTION_NOT_STARTED");
             assert!(auction.status == AuctionStatus::Bidding, "NOT_ABORTABLE");
             assert!(get_block_timestamp() >= auction.abort_after, "ABORT_TOO_EARLY");
             assert!(input.recovery_hash.is_non_zero(), "ZERO_RECOVERY_HASH");

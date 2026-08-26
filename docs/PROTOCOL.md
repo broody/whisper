@@ -49,9 +49,7 @@ metadata_hash
 winner_payload_domain
 reserve_price
 max_bids
-bidding_deadline
-force_reveal_after
-abort_after
+schedule
 vault_address
 vault_public_key
 reveal_public_key
@@ -69,6 +67,35 @@ operator_identity_commitment = Poseidon("WHISPER_OP_V1", operator_identity_key)
 The identity key is derived by STRK20 for the Whisper contract and is never supplied by browser application code.
 
 `vault_public_key` is the registered STRK20 recipient key. `reveal_public_key` is a separate application-layer encryption key for bid capsules; production deployments must not reuse the pool viewing key for that purpose.
+
+### Scheduling
+
+`AuctionConfig.schedule` is an explicit enum with two variants:
+
+```text
+Absolute {
+  bidding_deadline,
+  force_reveal_after,
+  abort_after
+}
+
+StartOnBid {
+  bidding_duration,
+  acceptance_duration,
+  settlement_duration
+}
+```
+
+An absolute auction enters `Bidding` at creation and validates the three timestamps against chain time. A start-on-bid auction enters `Pending` with `started_at` and all resolved timestamps set to zero. Its first successful bid atomically sets:
+
+```text
+started_at = block_timestamp
+bidding_deadline = started_at + bidding_duration
+force_reveal_after = bidding_deadline + acceptance_duration
+abort_after = force_reveal_after + settlement_duration
+```
+
+It then transitions to `Bidding` and emits `AuctionStarted` before `BidSubmitted`. Later bids do not move the schedule. A pending auction cannot be settled, aborted, or used to reclaim an escrowed lot. There is currently no creator-cancel path, so a token lot configured to start on bid remains escrowed while the auction is pending.
 
 ### Fulfillment model
 
@@ -137,7 +164,7 @@ The amount, salt, and bid nonce remain absent from public calldata. The random n
 2. The client creates the reveal commitment and uploads its encrypted capsule to the operator service.
 3. The dapp calls `buildWhisperBidActions(...)`, then passes the returned `[transfer, invoke]` actions to the connected wallet's `strk20InvokeTransaction(actions)` method.
 4. The wallet privately transfers exactly `amount` to `vault_address`, returning any input excess as private change, and invokes `privacy_invoke(WalletBidRequest::SubmitBid)` atomically. It owns note selection, proving, and relay submission.
-5. Whisper derives the group and first-tranche handles from the request, records the tranche as `funded = false`, and emits `BidSubmitted`.
+5. If the auction is pending, Whisper first resolves its deadlines from this transaction's block time and emits `AuctionStarted`. It then derives the group and first-tranche handles, records the tranche as `funded = false`, and emits `BidSubmitted`.
 6. The operator correlates the encrypted note created for the vault in that same pool transaction with `BidSubmitted`, decrypts the matching capsule, and checks auction, token, amount, commitment opening, and refund/winner routing commitments.
 7. During the acceptance grace period, before `force_reveal_after`, the operator submits `PrivacyRequest::AcceptBid` with the discovered `note_id`. The same batch must also consume and reissue a separate vault-owned replay-protection note: the canonical pool rejects a callback-only proof with `NO_REPLAY_PROTECTION`. Whisper authenticates the committed private identity, rejects reuse of the bid note ID, marks the tranche funded, appends it to the ordered accepted set, and emits `BidFunded`.
 
@@ -200,12 +227,20 @@ Abort is not a bidder reclaim mechanism. The operator must still create private 
 ## State transitions
 
 ```text
-create auction
+create absolute auction
     -> Bidding
        -> submit (unfunded)
        -> operator accept (funded and added to accepted set)
     -> Settled, after force_reveal_after
     -> Aborted, after abort_after
+
+create start-on-bid auction
+    -> Pending
+       -> Bidding, on first successful bid
+          -> submit (unfunded)
+          -> operator accept (funded and added to accepted set)
+       -> Settled, after force_reveal_after
+       -> Aborted, after abort_after
 ```
 
 Settlement and abort are terminal and mutually exclusive.

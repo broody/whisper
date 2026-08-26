@@ -187,6 +187,14 @@ function setup(store: OperatorStore = new InMemoryOperatorStore()) {
     assetAmount: 0n,
     fulfillmentStatus: "offchain",
     reservePrice: 50n,
+    schedule: {
+      kind: "absolute",
+      biddingDeadline: 90,
+      forceRevealAfter: 100,
+      abortAfter: 300,
+    },
+    startedAt: 75,
+    biddingDeadline: 90,
     forceRevealAfter: 100,
     abortAfter: 300,
     vaultAddress,
@@ -561,8 +569,9 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   const auctionValues = [
     7n, 0x1n, 0x444n, 0x555n, 0x6n,
     0n, 0n, 0n, 0n, 0n, 0n, 0n,
-    0x7n, 50n, 2n, 90n, 100n, 300n,
-    0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 2n, 2n, 1n, 0n, 0n,
+    0x7n, 50n, 2n, 0n, 90n, 100n, 300n,
+    80n, 90n, 100n, 300n,
+    0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 2n, 2n, 2n, 0n, 0n,
   ].map(hex);
   const bid = (handle: bigint, noteId: bigint) =>
     [7n, handle, handle + 100n, 0n, noteId, handle + 2n, handle + 3n, handle + 4n, 80n, 1n, 0n]
@@ -628,6 +637,13 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   const candidates = await chain.candidateVaultNoteIds("0xbbb", 0x333n, 0x444n);
 
   assert.equal(auction.status, "bidding");
+  assert.deepEqual(auction.schedule, {
+    kind: "absolute",
+    biddingDeadline: 90,
+    forceRevealAfter: 100,
+    abortAfter: 300,
+  });
+  assert.equal(auction.startedAt, 80);
   assert.equal(auction.fulfillmentKind, "offchain");
   assert.equal(auction.bidCount, 2);
   assert.deepEqual(bids.map((value) => value.bidHandle), [10n, 20n]);
@@ -635,6 +651,32 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   assert.deepEqual(events.auctions.map((value) => value.auctionId), [7n]);
   assert.deepEqual(events.submissions.map((value) => value.bidHandle), [10n]);
   assert.deepEqual(candidates, [101n, 102n]);
+});
+
+test("decodes a pending start-on-bid auction", async () => {
+  const values = [
+    8n, 0x1n, 0x444n, 0x555n, 0x6n,
+    0n, 0n, 0n, 0n, 0n, 0n, 0n,
+    0x7n, 50n, 2n, 1n, 100n, 20n, 80n,
+    0n, 0n, 0n, 0n,
+    0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 0n, 0n, 1n, 0n, 0n,
+  ].map(hex);
+  const provider = {
+    callContract: async () => values,
+  } as unknown as ProviderInterface;
+  const chain = new StarknetWhisperChain(provider, 0x222n, 0x111n);
+
+  const auction = await chain.getAuction(8n);
+
+  assert.equal(auction.status, "pending");
+  assert.equal(auction.startedAt, 0);
+  assert.equal(auction.biddingDeadline, 0);
+  assert.deepEqual(auction.schedule, {
+    kind: "start-on-bid",
+    biddingDuration: 100,
+    acceptanceDuration: 20,
+    settlementDuration: 80,
+  });
 });
 
 test("scans finalized events into durable worker state and schedules ready auctions", async () => {
@@ -672,6 +714,14 @@ test("scans finalized events into durable worker state and schedules ready aucti
       assetAmount: 0n,
       fulfillmentStatus: "offchain" as const,
       reservePrice: 50n,
+      schedule: {
+        kind: "absolute" as const,
+        biddingDeadline: 90,
+        forceRevealAfter: 100,
+        abortAfter: 300,
+      },
+      startedAt: 75,
+      biddingDeadline: 90,
       forceRevealAfter: 100,
       abortAfter: 300,
       vaultAddress,

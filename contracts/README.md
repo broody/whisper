@@ -20,6 +20,17 @@ One `payment_token` is snapshotted per auction. It may be any ERC-20 supported b
 
 `WhisperAuction` embeds OpenZeppelin's `UpgradeableComponent` and two-step `OwnableComponent`. Its constructor requires both the canonical pool address and an explicit nonzero owner; only that owner may replace the class hash. Ownership transfers require the proposed owner to accept before upgrade authority changes.
 
+## Scheduling
+
+`AuctionConfig.schedule` is a tagged choice between:
+
+- `AuctionSchedule::Absolute`, which opens the auction at creation and carries `bidding_deadline`, `force_reveal_after`, and `abort_after`; and
+- `AuctionSchedule::StartOnBid`, which creates a `Pending` auction and carries `bidding_duration`, `acceptance_duration`, and `settlement_duration`.
+
+The first successful bid starts a pending auction atomically. Its block timestamp becomes `started_at`; the contract derives the three resolved deadlines by adding the durations in order, changes the status to `Bidding`, and emits `AuctionStarted`. The stored `Auction` always exposes `schedule`, `started_at`, and the resolved deadline fields. For a pending auction, `started_at` and all resolved deadlines are zero.
+
+Pending auctions cannot settle, abort, or release an escrowed asset. Because there is no creator-cancel entrypoint yet, a start-on-bid token lot remains escrowed until a first bid starts the auction and it later reaches a terminal path.
+
 ## Fulfillment
 
 `AuctionConfig.fulfillment` is required and has four kinds: `Offchain`, `Erc20`, `Erc721`, and `Erc1155`. Offchain auctions require zero token fields and let applications such as Stake Wars interpret the generic `winner_commitment`. Token auctions require the seller to approve `WhisperAuction` before calling `create_auction`; the same transaction pulls and verifies the lot before the auction opens, so a failure rolls everything back.
