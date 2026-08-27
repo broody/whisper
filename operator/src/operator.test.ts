@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -27,6 +30,7 @@ import { loadOperatorRuntimeConfig } from "./config.ts";
 import { WhisperOperator } from "./engine.ts";
 import { SEPOLIA_OPERATOR_NETWORK } from "./networks.ts";
 import { createOfficialVaultRuntime, type OfficialPrivacySdkModule } from "./official-sdk.ts";
+import { loadOperatorSecretMaterial } from "./runtime-secrets.ts";
 import { createOperatorService } from "./service.ts";
 import { StarknetWhisperChain } from "./starknet-chain.ts";
 import { SqliteOperatorStore } from "./sqlite-store.ts";
@@ -512,6 +516,7 @@ test("persists encrypted capsules and idempotency state in SQLite", async () => 
 
 test("serves public vault configuration and accepts idempotent capsule uploads", async () => {
   const store = new InMemoryOperatorStore();
+  let ready = false;
   const server = createOperatorApi({
     store,
     publicConfig: {
@@ -521,6 +526,9 @@ test("serves public vault configuration and accepts idempotent capsule uploads",
       vaultAddress,
       vaultPublicKey: 0x777n,
       revealPublicKey,
+    },
+    readiness: async () => {
+      if (!ready) throw new Error("replay note is not ready");
     },
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -537,6 +545,14 @@ test("serves public vault configuration and accepts idempotent capsule uploads",
     ciphertext: "0x3344",
   };
   try {
+    const notReadyResponse = await fetch(`${baseUrl}/readyz`);
+    assert.equal(notReadyResponse.status, 503);
+    assert.deepEqual(await notReadyResponse.json(), { status: "not_ready" });
+    ready = true;
+    const readyResponse = await fetch(`${baseUrl}/readyz`);
+    assert.equal(readyResponse.status, 200);
+    assert.deepEqual(await readyResponse.json(), { status: "ready" });
+
     const configResponse = await fetch(`${baseUrl}/v1/config`);
     assert.equal(configResponse.status, 200);
     assert.equal((await configResponse.json() as { vaultAddress: string }).vaultAddress, "0x333");
@@ -773,6 +789,9 @@ test("composes the official SDK with injected key and provider boundaries", asyn
     chainId: constants.StarknetChainId.SN_MAIN,
     poolAddress,
     whisperAddress,
+    vaultAddress,
+    vaultPublicKey: 0x777n,
+    replayTokenAddress: 0x444n,
     submitter: { submit: async () => ({ transactionHash: "0x1" }) },
     sdkModule,
   });
@@ -802,6 +821,9 @@ test("composes direct pool discovery for Sepolia testing", async () => {
     chainId: constants.StarknetChainId.SN_MAIN,
     poolAddress,
     whisperAddress,
+    vaultAddress,
+    vaultPublicKey: 0x777n,
+    replayTokenAddress: 0x444n,
     submitter: { submit: async () => ({ transactionHash: "0x1" }) },
     sdkModule: {
       createPrivateTransfers(input) {
@@ -852,6 +874,9 @@ test("proves vault actions against the configured finalized block", async () => 
       },
     },
     "0x222",
+    vaultAddress,
+    0x777n,
+    0x444n,
     async () => 123,
   );
 
@@ -859,6 +884,142 @@ test("proves vault actions against the configured finalized block", async () => 
 
   assert.deepEqual(executeOptions, { provingBlockId: 123 });
   assert.deepEqual(submitted, [callAndProof]);
+});
+
+test("accepts a bid while atomically rotating a mature vault replay note", async () => {
+  const replayToken = 0x444n;
+  const replayNote = { id: 77n, amount: 5n, created: 10, sender: vaultAddress };
+  let discoveryInput: unknown;
+  let buildOptions: unknown;
+  let selectedInput: unknown;
+  let transferOutput: unknown;
+  let action: ((args: unknown) => {
+    contractAddress: string;
+    computeAdditionalData: bigint[];
+    invokeAdditionalData: bigint[];
+  }) | undefined;
+  let executeOptions: unknown;
+  const callAndProof = {
+    call: { contractAddress: "0x1", entrypoint: "apply_actions", calldata: [] },
+    proof: { data: "proof", proofFacts: [] },
+  };
+  const builder = {
+    register() {
+      return this;
+    },
+    with(token: bigint, operations: (tokenBuilder: unknown) => void) {
+      assert.equal(token, replayToken);
+      operations({
+        inputs(note: unknown) {
+          selectedInput = note;
+          return this;
+        },
+        transfer(output: unknown) {
+          transferOutput = output;
+          return this;
+        },
+      });
+      return this;
+    },
+    computeAndInvoke(input: typeof action) {
+      action = input;
+      return this;
+    },
+    async execute(options?: unknown) {
+      executeOptions = options;
+      return { callAndProof };
+    },
+  };
+  const transfers = {
+    discoverNotes: async (input: unknown) => {
+      discoveryInput = input;
+      return {
+        notes: new Map([
+          [
+            replayToken,
+            [
+              { id: 101n, amount: 50n, created: 1, sender: vaultAddress },
+              { id: 66n, amount: 5n, created: 2, sender: 0x999n },
+              replayNote,
+            ],
+          ],
+        ]),
+      };
+    },
+    build: (options: unknown) => {
+      buildOptions = options;
+      return builder;
+    },
+  } as unknown as PrivateTransfersLike;
+  const submitted: unknown[] = [];
+  const vault = new Strk20VaultClient(
+    transfers,
+    {
+      submit: async (input) => {
+        submitted.push(input);
+        return { transactionHash: "0x1" };
+      },
+    },
+    "0x222",
+    vaultAddress,
+    0x777n,
+    replayToken,
+    async () => 123,
+  );
+
+  await vault.acceptBid(7n, 10n, 101n);
+
+  assert.deepEqual(discoveryInput, { tokens: [replayToken], blockIdentifier: 123 });
+  assert.deepEqual(buildOptions, {
+    autoDiscover: { channels: "refresh" },
+    autoSetup: true,
+  });
+  assert.equal(selectedInput, replayNote);
+  assert.deepEqual(transferOutput, { recipient: 0x777n, amount: 5n });
+  assert.deepEqual(action?.({}), {
+    contractAddress: "0x222",
+    computeAdditionalData: [0n, 7n, 10n, 101n],
+    invokeAdditionalData: [],
+  });
+  assert.deepEqual(executeOptions, { provingBlockId: 123 });
+  assert.deepEqual(submitted, [callAndProof]);
+});
+
+test("refuses bid acceptance when no mature vault replay note is available", async () => {
+  const replayToken = 0x444n;
+  let built = false;
+  const transfers = {
+    discoverNotes: async () => ({
+      notes: new Map([
+        [
+          replayToken,
+          [
+            { id: 101n, amount: 50n, sender: vaultAddress },
+            { id: 77n, amount: 5n, sender: 0x999n },
+          ],
+        ],
+      ]),
+    }),
+    build: () => {
+      built = true;
+      throw new Error("must not build without a replay note");
+    },
+  } as unknown as PrivateTransfersLike;
+  const vault = new Strk20VaultClient(
+    transfers,
+    { submit: async () => ({ transactionHash: "0x1" }) },
+    "0x222",
+    vaultAddress,
+    0x777n,
+    replayToken,
+    async () => 123,
+  );
+
+  await assert.rejects(
+    vault.acceptBid(7n, 10n, 101n),
+    /no mature vault-owned replay note is available/,
+  );
+  assert.equal(built, false);
 });
 
 test("loads the Sepolia prover, discovery, RPC, and pool preset", () => {
@@ -877,6 +1038,8 @@ test("loads the Sepolia prover, discovery, RPC, and pool preset", () => {
   assert.equal(config.discoveryUrl, `${SEPOLIA_OPERATOR_NETWORK.discoveryUrl}/`);
   assert.equal(config.provingUrl, `${SEPOLIA_OPERATOR_NETWORK.provingUrl}/`);
   assert.equal(config.poolAddress, SEPOLIA_OPERATOR_NETWORK.poolAddress);
+  assert.equal(config.replayTokenAddress, SEPOLIA_OPERATOR_NETWORK.replayTokenAddress);
+  assert.equal(config.proceedsRecipient, 0x333n);
   assert.equal(config.provingBlockLag, 10);
 });
 
@@ -893,6 +1056,76 @@ test("allows explicit endpoint overrides on the Sepolia preset", () => {
 
   assert.equal(config.provingUrl, "https://self-hosted-prover.example/");
   assert.equal(config.discoveryUrl, `${SEPOLIA_OPERATOR_NETWORK.discoveryUrl}/`);
+});
+
+test("loads owner-only operator secret files and validates their public identities", () => {
+  const directory = mkdtempSync(join(tmpdir(), "whisper-operator-secrets-"));
+  const accountPath = join(directory, "accounts.json");
+  const operatorPath = join(directory, "operator.json");
+  const config = loadOperatorRuntimeConfig({
+    WHISPER_NETWORK: "sepolia",
+    WHISPER_CONTRACT_ADDRESS: "0x111",
+    WHISPER_VAULT_ADDRESS: "0x222",
+    WHISPER_VAULT_PUBLIC_KEY: "0x333",
+    WHISPER_REVEAL_PUBLIC_KEY: "0x444",
+    WHISPER_DEPLOYMENT_BLOCK: "123",
+  });
+  writeFileSync(
+    accountPath,
+    JSON.stringify({
+      "alpha-sepolia": {
+        whisper_sepolia_vault: { address: "0x222", private_key: "vault-private" },
+        whisper_sepolia_relayer: { address: "0x555", private_key: "relayer-private" },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    operatorPath,
+    JSON.stringify({
+      vault_address: "0x222",
+      relayer_address: "0x555",
+      vault_viewing_private_key: "viewing-private",
+      vault_viewing_public_key: "0x333",
+      capsule_reveal_private_key: "reveal-private",
+      capsule_reveal_public_key: "0x444",
+      whisper_address: "0x111",
+    }),
+    { mode: 0o600 },
+  );
+  try {
+    const secrets = loadOperatorSecretMaterial(
+      {
+        WHISPER_NETWORK: "sepolia",
+        WHISPER_ACCOUNT_FILE: accountPath,
+        WHISPER_OPERATOR_SECRETS_FILE: operatorPath,
+      },
+      config,
+    );
+    assert.deepEqual(secrets, {
+      vaultPrivateKey: "vault-private",
+      relayerAddress: "0x555",
+      relayerPrivateKey: "relayer-private",
+      vaultViewingPrivateKey: "viewing-private",
+      capsuleRevealPrivateKey: "reveal-private",
+    });
+
+    chmodSync(operatorPath, 0o644);
+    assert.throws(
+      () =>
+        loadOperatorSecretMaterial(
+          {
+            WHISPER_NETWORK: "sepolia",
+            WHISPER_ACCOUNT_FILE: accountPath,
+            WHISPER_OPERATOR_SECRETS_FILE: operatorPath,
+          },
+          config,
+        ),
+      /owner-only/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("assembles and validates the service without persisting its key material", async () => {
@@ -925,6 +1158,8 @@ test("assembles and validates the service without persisting its key material", 
       vaultAddress,
       vaultPublicKey: deriveWhisperRevealPublicKey(viewingKey),
       revealPublicKey: deriveWhisperRevealPublicKey(capsuleKey),
+      replayTokenAddress: 0x444n,
+      proceedsRecipient: 0x999n,
       databasePath: ":memory:",
       allowedOrigins: [],
       deploymentBlock: 1,

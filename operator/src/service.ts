@@ -38,6 +38,7 @@ export interface OperatorService {
   api: ReturnType<typeof createOperatorApi>;
   store: SqliteOperatorStore;
   validate(): Promise<void>;
+  ready(): Promise<void>;
   listen(): Promise<void>;
   registerVault(): Promise<{ transactionHash: string }>;
   close(): Promise<void>;
@@ -73,6 +74,9 @@ export async function createOperatorService(
       chainId: `0x${config.chainId.toString(16)}` as constants.StarknetChainId,
       poolAddress: config.poolAddress,
       whisperAddress: config.whisperAddress,
+      vaultAddress: config.vaultAddress,
+      vaultPublicKey: config.vaultPublicKey,
+      replayTokenAddress: config.replayTokenAddress,
       submitter,
       provingBlockIdProvider: async () =>
         Math.max((await dependencies.provider.getBlockNumber()) - config.provingBlockLag, 0),
@@ -100,6 +104,32 @@ export async function createOperatorService(
         ? {}
         : { onError: dependencies.onWorkerError }),
     });
+    const validate = async () => {
+      if (BigInt(dependencies.vaultAccount.address) !== config.vaultAddress) {
+        throw new Error("vault account address does not match public configuration");
+      }
+      if (BigInt(await dependencies.provider.getChainId()) !== config.chainId) {
+        throw new Error("RPC chain ID does not match operator configuration");
+      }
+      if (
+        deriveWhisperRevealPublicKey(await dependencies.viewingKeyProvider.getViewingKey()) !==
+        config.vaultPublicKey
+      ) {
+        throw new Error("vault viewing key does not match public configuration");
+      }
+      if (
+        deriveWhisperRevealPublicKey(
+          await dependencies.revealKeyProvider.getRevealPrivateKey(),
+        ) !== config.revealPublicKey
+      ) {
+        throw new Error("capsule reveal key does not match public configuration");
+      }
+      await chain.assertConfiguredPool();
+    };
+    const ready = async () => {
+      await validate();
+      await runtime.vault.assertReplayNoteAvailable();
+    };
     const api = createOperatorApi({
       store,
       publicConfig: {
@@ -110,6 +140,7 @@ export async function createOperatorService(
         vaultPublicKey: config.vaultPublicKey,
         revealPublicKey: config.revealPublicKey,
       },
+      readiness: ready,
       allowedOrigins: config.allowedOrigins,
     });
     return {
@@ -118,28 +149,8 @@ export async function createOperatorService(
       worker,
       api,
       store,
-      validate: async () => {
-        if (BigInt(dependencies.vaultAccount.address) !== config.vaultAddress) {
-          throw new Error("vault account address does not match public configuration");
-        }
-        if (BigInt(await dependencies.provider.getChainId()) !== config.chainId) {
-          throw new Error("RPC chain ID does not match operator configuration");
-        }
-        if (
-          deriveWhisperRevealPublicKey(await dependencies.viewingKeyProvider.getViewingKey()) !==
-          config.vaultPublicKey
-        ) {
-          throw new Error("vault viewing key does not match public configuration");
-        }
-        if (
-          deriveWhisperRevealPublicKey(
-            await dependencies.revealKeyProvider.getRevealPrivateKey(),
-          ) !== config.revealPublicKey
-        ) {
-          throw new Error("capsule reveal key does not match public configuration");
-        }
-        await chain.assertConfiguredPool();
-      },
+      validate,
+      ready,
       listen: async () => {
         if (api.listening) return;
         await new Promise<void>((resolve, reject) => {

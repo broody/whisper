@@ -10,6 +10,9 @@
   "files": [
     "dist"
   ],
+  "bin": {
+    "whisper-operator": "./dist/run.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -19,6 +22,7 @@
   "scripts": {
     "prebuild": "pnpm --dir ../sdk build",
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/run.js",
     "pretypecheck": "pnpm --dir ../sdk build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm --dir ../sdk build",

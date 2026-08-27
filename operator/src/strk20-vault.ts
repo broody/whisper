@@ -38,7 +38,10 @@ interface UpstreamBuilder {
 }
 
 export interface PrivateTransfersLike {
-  discoverNotes(input: { tokens: bigint[] }): Promise<{ notes: UpstreamNoteMap }>;
+  discoverNotes(input: {
+    tokens: bigint[];
+    blockIdentifier?: BlockIdentifier;
+  }): Promise<{ notes: UpstreamNoteMap }>;
   build(options?: {
     autoDiscover?: { notes?: "refresh"; channels?: "refresh" };
     autoSetup?: boolean;
@@ -59,10 +62,15 @@ export interface ProofSubmitter {
 
 /** Adapter over the official Privacy SDK's structural interface. */
 export class Strk20VaultClient implements VaultPort {
+  private replayRotation: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly transfers: PrivateTransfersLike,
     private readonly submitter: ProofSubmitter,
     private readonly whisperAddress: string,
+    private readonly vaultAddress: bigint,
+    private readonly vaultPublicKey: bigint,
+    private readonly replayTokenAddress: bigint,
     private readonly provingBlockIdProvider?: () => Promise<BlockIdentifier>,
   ) {}
 
@@ -88,19 +96,37 @@ export class Strk20VaultClient implements VaultPort {
     bidHandle: bigint,
     noteId: bigint,
   ): Promise<TransactionResult> {
-    const result = await this.execute(
-      this.transfers
-        .build()
-        .computeAndInvoke(
-          buildWhisperAcceptBidAction({
-            whisperAddress: this.whisperAddress,
-            auctionId,
-            bidHandle,
-            noteId,
-          }),
-        ),
-    );
-    return this.submitter.submit(result.callAndProof);
+    return this.withReplayRotation(async () => {
+      const provingBlockId = await this.provingBlockId();
+      const replayNote = await this.discoverReplayNote(noteId, provingBlockId);
+      const result = await this.execute(
+        this.transfers
+          .build({
+            autoDiscover: { channels: "refresh" },
+            autoSetup: true,
+          })
+          .with(this.replayTokenAddress, (token) => {
+            token.inputs(replayNote).transfer({
+              recipient: this.vaultPublicKey,
+              amount: replayNote.amount,
+            });
+          })
+          .computeAndInvoke(
+            buildWhisperAcceptBidAction({
+              whisperAddress: this.whisperAddress,
+              auctionId,
+              bidHandle,
+              noteId,
+            }),
+          ),
+        provingBlockId,
+      );
+      return this.submitter.submit(result.callAndProof);
+    });
+  }
+
+  async assertReplayNoteAvailable(): Promise<void> {
+    await this.discoverReplayNote(0n, await this.provingBlockId());
   }
 
   async settle(plan: SettlementPlan): Promise<TransactionResult> {
@@ -139,10 +165,64 @@ export class Strk20VaultClient implements VaultPort {
     return this.submitter.submit(result.callAndProof);
   }
 
-  private async execute(builder: UpstreamBuilder): Promise<{ callAndProof: CallAndProof }> {
-    if (this.provingBlockIdProvider === undefined) return builder.execute();
-    return builder.execute({ provingBlockId: await this.provingBlockIdProvider() });
+  private async discoverReplayNote(
+    excludedNoteId: bigint,
+    provingBlockId: BlockIdentifier | undefined,
+  ): Promise<UpstreamNote> {
+    const result = await this.transfers.discoverNotes({
+      tokens: [this.replayTokenAddress],
+      ...(provingBlockId === undefined ? {} : { blockIdentifier: provingBlockId }),
+    });
+    const candidates = (result.notes.get(this.replayTokenAddress) ?? [])
+      .filter(
+        (note) =>
+          BigInt(note.id) !== excludedNoteId &&
+          BigInt(note.sender) === this.vaultAddress &&
+          note.amount > 0n,
+      )
+      .sort(compareReplayNotes);
+    const note = candidates[0];
+    if (note === undefined) {
+      throw new Error("no mature vault-owned replay note is available");
+    }
+    return note;
   }
+
+  private async provingBlockId(): Promise<BlockIdentifier | undefined> {
+    return this.provingBlockIdProvider?.();
+  }
+
+  private async execute(
+    builder: UpstreamBuilder,
+    provingBlockId?: BlockIdentifier,
+  ): Promise<{ callAndProof: CallAndProof }> {
+    const blockId = provingBlockId ?? (await this.provingBlockId());
+    if (blockId === undefined) return builder.execute();
+    return builder.execute({ provingBlockId: blockId });
+  }
+
+  private async withReplayRotation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.replayRotation;
+    let release: () => void = () => undefined;
+    this.replayRotation = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
+}
+
+function compareReplayNotes(left: UpstreamNote, right: UpstreamNote): number {
+  const leftCreated = left.created ?? Number.MAX_SAFE_INTEGER;
+  const rightCreated = right.created ?? Number.MAX_SAFE_INTEGER;
+  if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+  const leftID = BigInt(left.id);
+  const rightID = BigInt(right.id);
+  return leftID < rightID ? -1 : leftID > rightID ? 1 : 0;
 }
 
 export interface OutsideExecutionSubmitterOptions {

@@ -44,6 +44,9 @@ export interface OfficialVaultRuntimeOptions {
   chainId: constants.StarknetChainId;
   poolAddress: bigint;
   whisperAddress: bigint;
+  vaultAddress: bigint;
+  vaultPublicKey: bigint;
+  replayTokenAddress: bigint;
   submitter: ProofSubmitter;
   provingBlockIdProvider?: () => Promise<BlockIdentifier>;
   /** Test/embedding override; production loads the optional peer package. */
@@ -78,6 +81,9 @@ export async function createOfficialVaultRuntime(
       transfers,
       options.submitter,
       `0x${options.whisperAddress.toString(16)}`,
+      options.vaultAddress,
+      options.vaultPublicKey,
+      options.replayTokenAddress,
       options.provingBlockIdProvider,
     ),
   };

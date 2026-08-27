@@ -17,11 +17,13 @@ Bidder proving is not an operator responsibility. A compatible privacy wallet ex
 - `OperatorWorker`: finalized-block scanning, durable cursors, stale-lease recovery, bid processing, and deadline settlement scheduling.
 - `createOfficialVaultRuntime`: exact `createPrivateTransfers(...)` composition for hosted proving and indexed discovery.
 - `createOperatorService`: validates the chain, pool, vault address, viewing key, and reveal key before listening.
-- `createOperatorApi`: `GET /healthz`, `GET /v1/config`, and idempotent `POST /v1/capsules` endpoints.
+- `createOperatorApi`: `GET /healthz`, replay-aware `GET /readyz`, `GET /v1/config`, and idempotent `POST /v1/capsules` endpoints.
 
 The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. The encrypted capsule is authenticated before matching, zero amount-matching notes remain retryable while discovery catches up, and multiple matching notes are rejected. Unrelated private change is allowed. At settlement, accepted tranches sharing a group handle are summed before Vickrey pricing and use one committed refund/winner route.
 
-The canonical pool rejects an operator-only `ComputeAndInvoke` proof with no private state transition as `NO_REPLAY_PROTECTION`. Acceptance must consume and reissue a separate vault-owned replay note in the same batch; it must not spend the escrowed bid note. Durable replay-note selection and rotation is the remaining operator integration layer.
+The canonical pool rejects an operator-only `ComputeAndInvoke` proof with no private state transition as `NO_REPLAY_PROTECTION`. Acceptance consumes and reissues a separate, mature, vault-originated replay note in the same proof batch. Selection excludes the current escrow note and notes sent by other accounts, then rotates the oldest eligible note back to the vault. The process serializes acceptance proofs so one local worker cannot select the same note twice.
+
+Keep an inventory of small replay notes for bid bursts: a newly reissued baton cannot be reused until discovery and proof-block maturity catch up. Run one scheduler for a vault/database. Coordinating replay-note leases across multiple processes remains a production-hardening task.
 
 ## Build
 
@@ -53,7 +55,16 @@ The public runtime configuration is loaded by `loadOperatorRuntimeConfig`. Signi
 
 `WHISPER_DATABASE_PATH` contains encrypted capsules and idempotency state, not these keys. For production, place capsule rate limiting and request authentication policy at the gateway, run one scheduler leader per database, and deploy this process separately from latency-sensitive game APIs.
 
-`createOperatorService(...)` returns the validated service components. Call `validate()`, then `listen()` and `worker.run(abortSignal)`; vault registration remains a separate explicit `registerVault()` action so process startup can never create an onchain transaction accidentally.
+`createOperatorService(...)` returns the validated service components. Call `ready()`, then `listen()` and `worker.run(abortSignal)`; readiness verifies the chain configuration, key identities, and presence of a mature replay note. Vault registration remains a separate explicit `registerVault()` action so process startup can never create an onchain transaction accidentally.
+
+The included runner reads public values from the environment and credentials directly from owner-only JSON files. Copy `.env.example` to the ignored `.env`, point `WHISPER_ACCOUNT_FILE` and `WHISPER_OPERATOR_SECRETS_FILE` at files with mode `0600`, and use the active deployment's public contract address and block. The manifest's public addresses and keys must match the runtime configuration.
+
+```sh
+pnpm build
+node --env-file=.env dist/run.js
+```
+
+For local Stake Wars integration, use `WHISPER_API_PORT=8082` because the local Torii gateway uses 8081. A successful startup performs reads and opens the HTTP server; it does not register a vault or submit a transaction. `GET /healthz` reports process health, while `GET /readyz` is `503` until the operator can safely accept a bid.
 
 ## Sepolia infrastructure
 

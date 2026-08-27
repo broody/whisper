@@ -81,6 +81,18 @@ The standard-invoke class is deployed on Sepolia and a direct official-SDK trans
 
 Mainnet registration, deployment, and transactions require explicit approval when this phase begins.
 
+## 8a. Local operator runtime and replay safety ✅ done 2026-08-27
+
+1. Consume and reissue a separate mature, vault-originated STRK note beside every `AcceptBid` callback so the canonical pool receives a nullifier without spending bidder escrow.
+2. Exclude the accepted escrow note and notes sent by other accounts, choose deterministically, and serialize rotations inside the single operator process.
+3. Refuse readiness when chain/key validation fails or no mature replay note is available.
+4. Add a secret-safe executable that reads owner-only account/operator manifests directly, validates their public identities, and never performs registration or another transaction at startup.
+5. Verify replay batching, missing-baton refusal, readiness status, configuration defaults, and secret-file permissions in headless tests.
+
+Multi-process replay-note leasing, capacity alerts, and abort/recovery automation remain Phase 4 production work. A local bid burst needs enough independently mature small replay notes because each reissued baton is temporarily unavailable while discovery and proof-block maturity catch up.
+
+Implemented and verified locally: the official SDK adapter discovers replay notes at the same proving block used for execution, rotates one vault-originated note beside `AcceptBid`, and serializes acceptance in the single process. The executable validates owner-only secret manifests and public identities, starts without sending a transaction, and exposes dynamic readiness. Operator typecheck and all 23 tests pass; the documentation typecheck and production build pass.
+
 ## 9. Phase 5 — unified auction fulfillment ✅ done 2026-08-24
 
 1. Make fulfillment an explicit, required part of `AuctionConfig`: `Offchain`, `Erc20`, `Erc721`, or `Erc1155` with a fixed-width token descriptor.
@@ -122,8 +134,8 @@ Sepolia validation completed 2026-08-24: v0.3 was declared and deployed at `0x03
 - Exercise ERC-721, ERC-1155, and winning token-claim flows on Sepolia with dedicated reviewed test tokens; the live v0.3 smoke currently covers offchain settlement plus ERC-20 escrow and timeout reclaim.
 - Confirm whether the alpha-Sepolia proving and discovery services are formally supported for sprint teams; until then, treat them as replaceable test infrastructure.
 - Run a self-hosted transaction prover for mainnet operator settlement; bidders should shield through a privacy-enabled wallet so the operator prover does not need to originate screened deposits.
-- Design and automate a durable inventory of vault-owned replay-protection notes for operator-only acceptance transactions; a bare `ComputeAndInvoke` callback is rejected as `NO_REPLAY_PROTECTION`.
-- Re-verify the exact sequencing and maturity requirements for settlement and consecutive replay-baton rotations.
+- Provision and monitor a durable inventory of small vault-owned replay-protection notes; local rotation is implemented, but multi-process leasing and capacity alerts are not.
+- Re-verify the exact production sizing and maturity requirements for consecutive replay-baton rotations under bid bursts.
 - Capsule cryptographic review and key-rotation policy.
 - Committee-ready custody remains deferred in [GitHub issue #1](https://github.com/broody/whisper/issues/1) until the Sepolia end-to-end path works.
 - OpenZeppelin Cairo token-interface compatibility and receiver behavior for the exact ERC-20, ERC-721, and ERC-1155 contracts accepted by Whisper.

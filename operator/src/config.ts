@@ -11,6 +11,8 @@ export interface OperatorRuntimeConfig {
   vaultAddress: bigint;
   vaultPublicKey: bigint;
   revealPublicKey: bigint;
+  replayTokenAddress: bigint;
+  proceedsRecipient: bigint;
   databasePath: string;
   allowedOrigins: string[];
   deploymentBlock: number;
@@ -24,6 +26,7 @@ export function loadOperatorRuntimeConfig(
   environment: Readonly<Record<string, string | undefined>>,
 ): OperatorRuntimeConfig {
   const network = resolveOperatorNetworkPreset(environment.WHISPER_NETWORK);
+  const vaultPublicKey = requiredFelt(environment, "WHISPER_VAULT_PUBLIC_KEY");
   return {
     chainId: requiredFelt(environment, "WHISPER_CHAIN_ID", network?.chainId),
     rpcUrl: requiredUrl(environment, "WHISPER_RPC_URL", network?.rpcUrl),
@@ -36,8 +39,18 @@ export function loadOperatorRuntimeConfig(
     poolAddress: requiredFelt(environment, "WHISPER_POOL_ADDRESS", network?.poolAddress),
     whisperAddress: requiredFelt(environment, "WHISPER_CONTRACT_ADDRESS"),
     vaultAddress: requiredFelt(environment, "WHISPER_VAULT_ADDRESS"),
-    vaultPublicKey: requiredFelt(environment, "WHISPER_VAULT_PUBLIC_KEY"),
+    vaultPublicKey,
     revealPublicKey: requiredFelt(environment, "WHISPER_REVEAL_PUBLIC_KEY"),
+    replayTokenAddress: requiredFelt(
+      environment,
+      "WHISPER_REPLAY_TOKEN_ADDRESS",
+      network?.replayTokenAddress,
+    ),
+    proceedsRecipient: requiredFelt(
+      environment,
+      "WHISPER_PROCEEDS_RECIPIENT",
+      vaultPublicKey,
+    ),
     databasePath: environment.WHISPER_DATABASE_PATH ?? "./data/whisper-operator.sqlite",
     allowedOrigins: parseOrigins(environment.WHISPER_ALLOWED_ORIGINS),
     deploymentBlock: requiredInteger(environment, "WHISPER_DEPLOYMENT_BLOCK", { minimum: 0 }),

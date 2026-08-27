@@ -22,6 +22,7 @@ export interface OperatorPublicConfig {
 export interface OperatorApiOptions {
   store: OperatorStore;
   publicConfig: OperatorPublicConfig;
+  readiness?: () => Promise<void>;
   allowedOrigins?: readonly string[];
   bodyLimitBytes?: number;
 }
@@ -35,6 +36,15 @@ export function createOperatorApi(options: OperatorApiOptions): Server {
       const url = new URL(request.url ?? "/", "http://operator.invalid");
       if (request.method === "GET" && url.pathname === "/healthz") {
         sendJson(response, 200, { status: "ok" });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/readyz") {
+        try {
+          await options.readiness?.();
+          sendJson(response, 200, { status: "ready" });
+        } catch {
+          sendJson(response, 503, { status: "not_ready" });
+        }
         return;
       }
       if (request.method === "GET" && url.pathname === "/v1/config") {

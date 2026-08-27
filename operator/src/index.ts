@@ -4,6 +4,7 @@ export * from "./config.js";
 export * from "./engine.js";
 export * from "./networks.js";
 export * from "./official-sdk.js";
+export * from "./runtime-secrets.js";
 export * from "./service.js";
 export * from "./settlement.js";
 export * from "./sqlite-store.js";

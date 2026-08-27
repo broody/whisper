@@ -5,6 +5,7 @@ export interface OperatorNetworkPreset {
   discoveryUrl: string;
   provingUrl: string;
   poolAddress: bigint;
+  replayTokenAddress: bigint;
 }
 
 /**
@@ -19,6 +20,8 @@ export const SEPOLIA_OPERATOR_NETWORK = Object.freeze({
   discoveryUrl: "https://discovery-service.alpha-sepolia.sw-dev.io",
   provingUrl: "https://transaction-prover.alpha-sepolia.sw-dev.io",
   poolAddress: 0x0254a6b2997ef52e9f830ce1f543f6b29768295e8d17e2267d672c552cfe0d91n,
+  replayTokenAddress:
+    0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938dn,
 }) satisfies OperatorNetworkPreset;
 
 export function resolveOperatorNetworkPreset(

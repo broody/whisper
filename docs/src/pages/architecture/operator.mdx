@@ -75,7 +75,9 @@ The result must become exactly one before the acceptance deadline:
 
 Other transaction outputs, such as private change, do not make the bid ambiguous when their amounts differ. This makes no claim that the pool itself understands an auction. `AcceptBid` is the operator's explicit attestation that the discovered note matches the committed bid.
 
-`AcceptBid` must share its proof batch with a replay-protecting private state transition. The Sepolia pool rejected a callback-only proof as `NO_REPLAY_PROTECTION`; consuming and reissuing a separate vault-owned replay note supplies the nullifier while leaving the bid note available for settlement.
+`AcceptBid` must share its proof batch with a replay-protecting private state transition. The Sepolia pool rejected a callback-only proof as `NO_REPLAY_PROTECTION`; the operator consumes and reissues the oldest mature vault-originated replay note in the same proof batch. It excludes the current escrow note and notes sent by other accounts, leaving the bid note available for settlement. Acceptance is serialized within one process, and readiness fails when no eligible replay note is available.
+
+A newly reissued baton needs discovery and proof-block maturity before reuse, so operators should provision several small replay notes for bursts and run one scheduler per vault/database. Multi-process replay-note leasing is not implemented.
 
 ## Capsule validation
 
