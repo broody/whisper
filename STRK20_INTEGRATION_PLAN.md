@@ -69,7 +69,7 @@ The operator now has an explicit `sepolia` preset for the deployed pool, PublicN
 4. Aggregate funded tranches by group before Vickrey pricing and combine each group's refund or winner change.
 5. Verify exact Wallet API encoding, cross-language hashes, group pricing, output conservation, and operator ABI decoding in local Cairo and TypeScript tests.
 
-The standard-invoke class is deployed on Sepolia and a direct official-SDK transfer + invoke bid completed discovery, acceptance, force reveal, and settlement against the canonical pool. A manual Ready Wallet bid and additive top-up test are still required before marking the external integration complete.
+The standard-invoke class is deployed on Sepolia and a direct official-SDK transfer + invoke bid completed discovery, acceptance, force reveal, and settlement against the canonical pool. A manual Ready Wallet initial bid reached the deployed Whisper auction and operator capsule pipeline on 2026-08-27. Acceptance then exposed an operator adapter bug that supplied the vault viewing public key where the Privacy SDK requires a registered account address. The adapter now rotates replay notes to the vault account address and defaults proceeds to that address. A clean-round acceptance/settlement rerun and an additive top-up test are still required before marking the external integration complete.
 
 ## 8. Phase 4 — mainnet integration and operational hardening
 
@@ -91,7 +91,11 @@ Mainnet registration, deployment, and transactions require explicit approval whe
 
 Multi-process replay-note leasing, capacity alerts, and abort/recovery automation remain Phase 4 production work. A local bid burst needs enough independently mature small replay notes because each reissued baton is temporarily unavailable while discovery and proof-block maturity catch up.
 
-Implemented and verified locally: the official SDK adapter discovers replay notes at the same proving block used for execution, rotates one vault-originated note beside `AcceptBid`, and serializes acceptance in the single process. The executable validates owner-only secret manifests and public identities, starts without sending a transaction, and exposes dynamic readiness. Operator typecheck and all 23 tests pass; the documentation typecheck and production build pass.
+Implemented and verified locally: the official SDK adapter discovers replay notes at the same proving block used for execution, rotates one vault-originated note beside `AcceptBid`, and serializes acceptance in the single process. The executable validates owner-only secret manifests and public identities, starts without sending a transaction, and exposes dynamic readiness. Operator typecheck and all 29 tests pass; the documentation typecheck and production build pass.
+
+The 2026-08-27 Ready smoke test also clarified recipient semantics: Privacy SDK transfer outputs take registered Starknet account addresses, never viewing public keys. The replay rotation and default proceeds route now use the vault address, configuration rejects the known public-key misconfiguration, and regression tests assert the exact transfer recipient. Any auction created with the old proceeds commitment remains immutable and requires a fresh round for corrected end-to-end verification.
+
+Manual recovery completed 2026-08-27 for the two rejected auction-2 submissions. A dry-run command verified each encrypted capsule, commitment, transaction-scoped note, and refund route without logging private values; one confirmed Sepolia batch then consumed the two vault notes and created two encrypted refund notes. A replay-protected abort committed that recovery transaction onchain, after which the Stake Wars coordinator created auction 3. The first Ready bid in auction 3 was discovered and funded successfully with the corrected vault recipient. The operator persists recovery state and refuses duplicate execution; automatic abort/recovery scheduling and alerts remain Phase 4 work.
 
 ## 9. Phase 5 — unified auction fulfillment ✅ done 2026-08-24
 
@@ -129,7 +133,7 @@ Sepolia validation completed 2026-08-24: v0.3 was declared and deployed at `0x03
 - Canonical mainnet pool ABI and the exact pool event fields needed to derive output note IDs from a transaction.
 - Current Privacy SDK release, package-registry authentication, proving URL, discovery URL, and relayer submission requirements.
 - Current Wallet API version, Ready support for atomic `transfer` + standard `invoke`, and exact Starknet.js/get-starknet pins in the consuming dapp.
-- Deploy the new Wallet API callback ABI to Sepolia and complete initial-bid plus additive-tranche testing with Ready.
+- Complete acceptance and settlement in a fresh corrected auction plus additive-tranche testing with Ready; the initial wallet submission path is confirmed.
 - Register the verified v0.3 offchain auction as a canonical Stake Wars round when the API's explicit admin procedure is implemented; no production API database or Fly deployment was changed during the contract smoke test.
 - Exercise ERC-721, ERC-1155, and winning token-claim flows on Sepolia with dedicated reviewed test tokens; the live v0.3 smoke currently covers offchain settlement plus ERC-20 escrow and timeout reclaim.
 - Confirm whether the alpha-Sepolia proving and discovery services are formally supported for sprint teams; until then, treat them as replaceable test infrastructure.

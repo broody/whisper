@@ -111,6 +111,17 @@ export interface TransactionResult {
   transactionHash: string;
 }
 
+export interface RecoveryRefund {
+  note: VaultNote;
+  recipient: bigint;
+}
+
+export interface RecoveryPlan {
+  auctionId: bigint;
+  paymentToken: bigint;
+  refunds: RecoveryRefund[];
+}
+
 export interface WhisperChainPort {
   getAuction(auctionId: bigint): Promise<AuctionView>;
   getBid(auctionId: bigint, bidHandle: bigint): Promise<BidView>;
@@ -131,6 +142,11 @@ export interface VaultPort {
   discoverNotes(paymentToken: bigint): Promise<VaultNote[]>;
   acceptBid(auctionId: bigint, bidHandle: bigint, noteId: bigint): Promise<TransactionResult>;
   settle(plan: SettlementPlan): Promise<TransactionResult>;
+}
+
+export interface RecoveryVaultPort {
+  discoverNotes(paymentToken: bigint): Promise<VaultNote[]>;
+  refundUnacceptedBids(plan: RecoveryPlan): Promise<TransactionResult>;
 }
 
 export interface CapsuleCipher {

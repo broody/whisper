@@ -30,6 +30,7 @@ export default defineConfig({
       text: "Implementation",
       items: [
         { text: "Operator architecture", link: "/architecture/operator" },
+        { text: "Rejected-bid recovery", link: "/operations/rejected-bid-recovery" },
         { text: "Privacy & trust", link: "/security/privacy-and-trust" },
         { text: "Development status", link: "/operations/development-status" },
       ],

@@ -1,5 +1,6 @@
 import {
   buildWhisperAcceptBidAction,
+  buildWhisperAbortAction,
   buildWhisperSettlementAction,
   type ComputeAndInvokeBuilder,
 } from "@whisper-trade/sdk";
@@ -12,7 +13,14 @@ import {
   type ProviderInterface,
 } from "starknet";
 
-import type { SettlementPlan, TransactionResult, VaultNote, VaultPort } from "./types.ts";
+import type {
+  RecoveryPlan,
+  RecoveryVaultPort,
+  SettlementPlan,
+  TransactionResult,
+  VaultNote,
+  VaultPort,
+} from "./types.ts";
 
 interface UpstreamNote {
   id: string | number | bigint;
@@ -61,7 +69,7 @@ export interface ProofSubmitter {
 }
 
 /** Adapter over the official Privacy SDK's structural interface. */
-export class Strk20VaultClient implements VaultPort {
+export class Strk20VaultClient implements VaultPort, RecoveryVaultPort {
   private replayRotation: Promise<void> = Promise.resolve();
 
   constructor(
@@ -69,7 +77,6 @@ export class Strk20VaultClient implements VaultPort {
     private readonly submitter: ProofSubmitter,
     private readonly whisperAddress: string,
     private readonly vaultAddress: bigint,
-    private readonly vaultPublicKey: bigint,
     private readonly replayTokenAddress: bigint,
     private readonly provingBlockIdProvider?: () => Promise<BlockIdentifier>,
   ) {}
@@ -107,7 +114,7 @@ export class Strk20VaultClient implements VaultPort {
           })
           .with(this.replayTokenAddress, (token) => {
             token.inputs(replayNote).transfer({
-              recipient: this.vaultPublicKey,
+              recipient: this.vaultAddress,
               amount: replayNote.amount,
             });
           })
@@ -127,6 +134,38 @@ export class Strk20VaultClient implements VaultPort {
 
   async assertReplayNoteAvailable(): Promise<void> {
     await this.discoverReplayNote(0n, await this.provingBlockId());
+  }
+
+  async abortAuction(
+    auctionId: bigint,
+    recoveryHash: bigint,
+  ): Promise<TransactionResult> {
+    return this.withReplayRotation(async () => {
+      const provingBlockId = await this.provingBlockId();
+      const replayNote = await this.discoverReplayNote(0n, provingBlockId);
+      const result = await this.execute(
+        this.transfers
+          .build({
+            autoDiscover: { channels: "refresh" },
+            autoSetup: true,
+          })
+          .with(this.replayTokenAddress, (token) => {
+            token.inputs(replayNote).transfer({
+              recipient: this.vaultAddress,
+              amount: replayNote.amount,
+            });
+          })
+          .computeAndInvoke(
+            buildWhisperAbortAction({
+              whisperAddress: this.whisperAddress,
+              auctionId,
+              recoveryHash,
+            }),
+          ),
+        provingBlockId,
+      );
+      return this.submitter.submit(result.callAndProof);
+    });
   }
 
   async settle(plan: SettlementPlan): Promise<TransactionResult> {
@@ -161,6 +200,56 @@ export class Strk20VaultClient implements VaultPort {
             settlementHash: plan.settlementHash,
           }),
         ),
+    );
+    return this.submitter.submit(result.callAndProof);
+  }
+
+  async refundUnacceptedBids(plan: RecoveryPlan): Promise<TransactionResult> {
+    if (plan.refunds.length === 0) throw new Error("recovery plan has no refunds");
+    const noteIds = new Set<string>();
+    for (const refund of plan.refunds) {
+      if (refund.note.token !== plan.paymentToken) {
+        throw new Error("recovery note token does not match the auction payment token");
+      }
+      if (refund.note.amount <= 0n || refund.recipient <= 0n) {
+        throw new Error("recovery refund must have a positive amount and recipient");
+      }
+      const noteId = refund.note.id.toString();
+      if (noteIds.has(noteId)) throw new Error("recovery plan contains a duplicate note");
+      noteIds.add(noteId);
+    }
+    const provingBlockId = await this.provingBlockId();
+    const discovered = await this.transfers.discoverNotes({
+      tokens: [plan.paymentToken],
+      ...(provingBlockId === undefined ? {} : { blockIdentifier: provingBlockId }),
+    });
+    const notesAtProvingBlock = new Map(
+      (discovered.notes.get(plan.paymentToken) ?? []).map((note) => [BigInt(note.id).toString(), note]),
+    );
+    const inputNotes = plan.refunds.map((refund) => {
+      const note = notesAtProvingBlock.get(refund.note.id.toString());
+      if (note === undefined || note.amount !== refund.note.amount) {
+        throw new Error("recovery note is unavailable at the proving block");
+      }
+      return note;
+    });
+    const result = await this.execute(
+      this.transfers
+        .build({
+          autoDiscover: { channels: "refresh" },
+          autoSetup: true,
+        })
+        .with(plan.paymentToken, (token) => {
+          token
+            .inputs(...inputNotes)
+            .transfer(
+              ...plan.refunds.map((refund) => ({
+                recipient: refund.recipient,
+                amount: refund.note.amount,
+              })),
+            );
+        }),
+      provingBlockId,
     );
     return this.submitter.submit(result.callAndProof);
   }

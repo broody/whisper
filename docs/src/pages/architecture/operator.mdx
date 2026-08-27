@@ -41,7 +41,9 @@ flowchart TB
 | `operator/src/engine.ts` | Matches notes, validates capsules, accepts tranches, aggregates bid groups, and constructs Vickrey settlement plans |
 | `operator/src/strk20-vault.ts` | Adapts official SDK discovery/builders and submits proof-backed pool calls |
 | `operator/src/official-sdk.ts` | Constructs `createPrivateTransfers(...)` with injected providers and the vault's own key boundary |
-| `operator/src/sqlite-store.ts` | Persists capsules, submissions, auctions, leases, cursor, and idempotency state |
+| `operator/src/recovery.ts` | Verifies and returns exact notes for rejected, unfunded bids |
+| `operator/src/recover-auction.ts` | Provides the dry-run-first manual recovery command |
+| `operator/src/sqlite-store.ts` | Persists capsules, submissions, auctions, recoveries, leases, cursor, and idempotency state |
 | `operator/src/api.ts` | Exposes health, public vault configuration, and idempotent capsule upload endpoints |
 | `operator/src/service.ts` | Assembles and validates the service without starting transactions automatically |
 
@@ -169,6 +171,6 @@ Each worker pass loads all tracked auctions:
 - from `force_reveal_after` until `abort_after`, it attempts settlement; and
 - after `abort_after`, normal settlement is no longer submitted.
 
-Production still needs alerting well before the abort deadline, recovery automation, database backups, and a single scheduler leader per database.
+Rejected, unfunded notes can be returned with the dry-run-first [recovery command](/operations/rejected-bid-recovery). After the deadline, its confirmed transaction can be committed by the dry-run-first abort command. Production still needs alerting well before the abort deadline, automatic abort/funded-auction recovery, database backups, and a single scheduler leader per database.
 
 For the operator's authority and failure modes, continue to [Privacy & trust](/security/privacy-and-trust).

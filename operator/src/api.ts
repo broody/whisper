@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 
 import {
   WHISPER_CAPSULE_ALGORITHM,
@@ -7,6 +8,7 @@ import {
 } from "@whisper-trade/sdk";
 
 import type { OperatorStore } from "./store.ts";
+import type { AuctionCoordinator, CreateAuctionRequest } from "./auction-coordinator.ts";
 
 const DEFAULT_BODY_LIMIT = 64 * 1_024;
 
@@ -25,6 +27,8 @@ export interface OperatorApiOptions {
   readiness?: () => Promise<void>;
   allowedOrigins?: readonly string[];
   bodyLimitBytes?: number;
+  coordinator?: AuctionCoordinator;
+  coordinatorToken?: string;
 }
 
 export function createOperatorApi(options: OperatorApiOptions): Server {
@@ -68,6 +72,34 @@ export function createOperatorApi(options: OperatorApiOptions): Server {
         });
         return;
       }
+      if (request.method === "POST" && url.pathname === "/v1/coordinator/auctions") {
+        if (options.coordinator === undefined || options.coordinatorToken === undefined) {
+          sendJson(response, 404, { error: "not found" });
+          return;
+        }
+        if (!authorized(request, options.coordinatorToken)) {
+          sendJson(response, 401, { error: "unauthorized" });
+          return;
+        }
+        if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+          sendJson(response, 415, { error: "content type must be application/json" });
+          return;
+        }
+        const result = await options.coordinator.create(
+          parseCreateAuctionRequest(await readJson(request, bodyLimit)),
+        );
+        if (result === "pending") {
+          sendJson(response, 409, { error: "auction creation is already pending" });
+          return;
+        }
+        sendJson(response, 201, {
+          requestId: result.requestId,
+          auctionId: hex(result.auctionId),
+          transactionHash: result.transactionHash,
+          creator: hex(result.creator),
+        });
+        return;
+      }
       sendJson(response, 404, { error: "not found" });
     } catch (error) {
       const status = error instanceof RequestError ? error.status : 500;
@@ -76,6 +108,60 @@ export function createOperatorApi(options: OperatorApiOptions): Server {
       });
     }
   });
+}
+
+function authorized(request: IncomingMessage, token: string): boolean {
+  const header = request.headers.authorization;
+  if (header === undefined || !header.startsWith("Bearer ")) return false;
+  const supplied = Buffer.from(header.slice("Bearer ".length));
+  const expected = Buffer.from(token);
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+}
+
+function parseCreateAuctionRequest(value: unknown): CreateAuctionRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new RequestError(400, "auction request must be an object");
+  }
+  const candidate = value as Record<string, unknown>;
+  return {
+    requestId: requiredString(candidate, "requestId"),
+    paymentToken: requiredBigInt(candidate, "paymentToken"),
+    metadataHash: requiredBigInt(candidate, "metadataHash"),
+    winnerPayloadDomain: requiredBigInt(candidate, "winnerPayloadDomain"),
+    reservePrice: requiredBigInt(candidate, "reservePrice"),
+    maxBids: requiredInteger(candidate, "maxBids"),
+    biddingDuration: requiredInteger(candidate, "biddingDuration"),
+    acceptanceDuration: requiredInteger(candidate, "acceptanceDuration"),
+    settlementDuration: requiredInteger(candidate, "settlementDuration"),
+  };
+}
+
+function requiredString(value: Record<string, unknown>, key: string): string {
+  const field = value[key];
+  if (typeof field !== "string" || field.length === 0) {
+    throw new RequestError(400, `${key} must be a non-empty string`);
+  }
+  return field;
+}
+
+function requiredBigInt(value: Record<string, unknown>, key: string): bigint {
+  const field = value[key];
+  if (typeof field !== "string" && typeof field !== "number") {
+    throw new RequestError(400, `${key} must be bigint-compatible`);
+  }
+  try {
+    return BigInt(field);
+  } catch {
+    throw new RequestError(400, `${key} must be bigint-compatible`);
+  }
+}
+
+function requiredInteger(value: Record<string, unknown>, key: string): number {
+  const field = value[key];
+  if (typeof field !== "number" || !Number.isSafeInteger(field)) {
+    throw new RequestError(400, `${key} must be an integer`);
+  }
+  return field;
 }
 
 class RequestError extends Error {

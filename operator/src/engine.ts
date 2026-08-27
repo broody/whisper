@@ -142,6 +142,15 @@ export class WhisperOperator {
     if (!claimed) return undefined;
 
     try {
+      const proceedsRecipient = await this.dependencies.proceedsRecipients.getProceedsRecipient(
+        auctionId,
+      );
+      if (
+        computeProceedsRecipientCommitment(proceedsRecipient) !==
+        auction.proceedsRecipientCommitment
+      ) {
+        throw new Error("proceeds recipient does not match auction commitment");
+      }
       const bids = await chain.getAcceptedBids(auctionId);
       if (bids.length !== auction.bidCount) {
         throw new RetryableOperatorError("accepted tranche set is incomplete");
@@ -177,12 +186,6 @@ export class WhisperOperator {
         salt: BigInt(openings[index]!.salt),
       }));
       const price = computeVickreyPrice(aggregateReveals(reveals), auction.reservePrice);
-      const proceedsRecipient = await this.dependencies.proceedsRecipients.getProceedsRecipient(
-        auctionId,
-      );
-      if (computeProceedsRecipientCommitment(proceedsRecipient) !== auction.proceedsRecipientCommitment) {
-        throw new Error("proceeds recipient does not match auction commitment");
-      }
       const outputs = buildOutputs(bids, openings, price.winnerBidHandle, price.clearingPrice, proceedsRecipient);
       const revealsRoot = computeRevealsRoot(auctionId, reveals);
       const outputsRoot = computeOutputsRoot(auctionId, outputs);

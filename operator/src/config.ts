@@ -20,13 +20,25 @@ export interface OperatorRuntimeConfig {
   apiHost: string;
   apiPort: number;
   pollIntervalMilliseconds: number;
+  coordinatorToken?: string;
 }
 
 export function loadOperatorRuntimeConfig(
   environment: Readonly<Record<string, string | undefined>>,
 ): OperatorRuntimeConfig {
   const network = resolveOperatorNetworkPreset(environment.WHISPER_NETWORK);
+  const vaultAddress = requiredFelt(environment, "WHISPER_VAULT_ADDRESS");
   const vaultPublicKey = requiredFelt(environment, "WHISPER_VAULT_PUBLIC_KEY");
+  const proceedsRecipient = requiredFelt(
+    environment,
+    "WHISPER_PROCEEDS_RECIPIENT",
+    vaultAddress,
+  );
+  if (proceedsRecipient === vaultPublicKey && proceedsRecipient !== vaultAddress) {
+    throw new Error(
+      "WHISPER_PROCEEDS_RECIPIENT must be a Starknet account address, not WHISPER_VAULT_PUBLIC_KEY",
+    );
+  }
   return {
     chainId: requiredFelt(environment, "WHISPER_CHAIN_ID", network?.chainId),
     rpcUrl: requiredUrl(environment, "WHISPER_RPC_URL", network?.rpcUrl),
@@ -38,7 +50,7 @@ export function loadOperatorRuntimeConfig(
     provingUrl: requiredUrl(environment, "WHISPER_PROVING_URL", network?.provingUrl),
     poolAddress: requiredFelt(environment, "WHISPER_POOL_ADDRESS", network?.poolAddress),
     whisperAddress: requiredFelt(environment, "WHISPER_CONTRACT_ADDRESS"),
-    vaultAddress: requiredFelt(environment, "WHISPER_VAULT_ADDRESS"),
+    vaultAddress,
     vaultPublicKey,
     revealPublicKey: requiredFelt(environment, "WHISPER_REVEAL_PUBLIC_KEY"),
     replayTokenAddress: requiredFelt(
@@ -46,11 +58,7 @@ export function loadOperatorRuntimeConfig(
       "WHISPER_REPLAY_TOKEN_ADDRESS",
       network?.replayTokenAddress,
     ),
-    proceedsRecipient: requiredFelt(
-      environment,
-      "WHISPER_PROCEEDS_RECIPIENT",
-      vaultPublicKey,
-    ),
+    proceedsRecipient,
     databasePath: environment.WHISPER_DATABASE_PATH ?? "./data/whisper-operator.sqlite",
     allowedOrigins: parseOrigins(environment.WHISPER_ALLOWED_ORIGINS),
     deploymentBlock: requiredInteger(environment, "WHISPER_DEPLOYMENT_BLOCK", { minimum: 0 }),
@@ -63,7 +71,15 @@ export function loadOperatorRuntimeConfig(
     pollIntervalMilliseconds: optionalInteger(environment.WHISPER_POLL_INTERVAL_MS, 10_000, {
       minimum: 250,
     }),
+    ...(nonEmpty(environment.WHISPER_COORDINATOR_TOKEN) === undefined
+      ? {}
+      : { coordinatorToken: nonEmpty(environment.WHISPER_COORDINATOR_TOKEN)! }),
   };
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
 function parseDiscoveryMode(

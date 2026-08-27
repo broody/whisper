@@ -169,6 +169,6 @@ Stake Wars selects the explicit `Offchain` kind for controller fulfillment. ERC-
 
 After `abort_after`, the operator can submit `PrivacyRequest::Abort` with a non-zero `recovery_hash`. This records a commitment to an external recovery or refund manifest.
 
-It does **not** move funds and does not let bidders reclaim vault notes. The same operator still has to construct private refunds. This is an operational recovery marker, not a cryptographic escape hatch.
+It does **not** move funds and does not let bidders reclaim vault notes. The same operator still has to construct private refunds. Rejected, unfunded notes use the operator's [rejected-bid recovery and abort runbook](/operations/rejected-bid-recovery), which commits the confirmed refund transaction as the recovery hash; accepted-note recovery after an abort remains separate work. This is an operational recovery marker, not a cryptographic escape hatch.
 
 For how these calls are generated and scheduled, continue to [Operator architecture](/architecture/operator).

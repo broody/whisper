@@ -3,7 +3,10 @@ import { DatabaseSync, type StatementResultingChanges } from "node:sqlite";
 import type { WhisperEncryptedCapsule } from "@whisper-trade/sdk";
 
 import type {
+  AuctionCreationRecord,
   OperatorStore,
+  RecoveryRecord,
+  RecoveryStatus,
   SettlementRecord,
   SettlementStatus,
   SubmissionRecord,
@@ -26,6 +29,23 @@ interface SubmissionRow {
 interface SettlementRow {
   auction_id: string;
   status: SettlementStatus;
+  transaction_hash: string | null;
+  error: string | null;
+  updated_at: number;
+}
+
+interface AuctionCreationRow {
+  request_id: string;
+  status: "pending" | "completed" | "failed";
+  auction_id: string | null;
+  transaction_hash: string | null;
+  error: string | null;
+  updated_at: number;
+}
+
+interface RecoveryRow {
+  auction_id: string;
+  status: RecoveryStatus;
   transaction_hash: string | null;
   error: string | null;
   updated_at: number;
@@ -74,6 +94,23 @@ export class SqliteOperatorStore implements OperatorStore {
       CREATE TABLE IF NOT EXISTS operator_metadata (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS auction_creations (
+        request_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('pending','completed','failed')),
+        auction_id TEXT,
+        transaction_hash TEXT,
+        error TEXT,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS auction_recoveries (
+        auction_id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK (status IN ('recovering','failed','completed')),
+        transaction_hash TEXT,
+        error TEXT,
+        updated_at INTEGER NOT NULL
       ) STRICT;
     `);
   }
@@ -259,6 +296,16 @@ export class SqliteOperatorStore implements OperatorStore {
     return rows.map(submissionFromRow);
   }
 
+  async listSubmissions(auctionId: bigint): Promise<SubmissionRecord[]> {
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM submissions WHERE auction_id = ?
+         ORDER BY block_number, bid_handle`,
+      )
+      .all(auctionId.toString()) as unknown as SubmissionRow[];
+    return rows.map(submissionFromRow);
+  }
+
   async recoverStaleWork(staleBefore: number): Promise<number> {
     const now = Date.now();
     const submissions = this.database
@@ -274,6 +321,108 @@ export class SqliteOperatorStore implements OperatorStore {
       )
       .run(now, staleBefore);
     return Number(submissions.changes) + Number(settlements.changes);
+  }
+
+  async getRecovery(auctionId: bigint): Promise<RecoveryRecord | undefined> {
+    const row = this.database
+      .prepare("SELECT * FROM auction_recoveries WHERE auction_id = ?")
+      .get(auctionId.toString()) as RecoveryRow | undefined;
+    if (row === undefined) return undefined;
+    return {
+      auctionId: BigInt(row.auction_id),
+      status: row.status,
+      updatedAt: row.updated_at,
+      ...(row.transaction_hash === null ? {} : { transactionHash: row.transaction_hash }),
+      ...(row.error === null ? {} : { error: row.error }),
+    };
+  }
+
+  async claimRecovery(auctionId: bigint): Promise<boolean> {
+    const result = this.database
+      .prepare(
+        `INSERT INTO auction_recoveries (auction_id, status, updated_at)
+         VALUES (?, 'recovering', ?)
+         ON CONFLICT (auction_id) DO UPDATE SET
+           status = 'recovering', transaction_hash = NULL, error = NULL,
+           updated_at = excluded.updated_at
+         WHERE auction_recoveries.status = 'failed'`,
+      )
+      .run(auctionId.toString(), Date.now());
+    return changed(result);
+  }
+
+  async completeRecovery(auctionId: bigint, transactionHash: string): Promise<void> {
+    const result = this.database
+      .prepare(
+        `UPDATE auction_recoveries SET status = 'completed', transaction_hash = ?,
+           error = NULL, updated_at = ? WHERE auction_id = ? AND status = 'recovering'`,
+      )
+      .run(transactionHash, Date.now(), auctionId.toString());
+    if (!changed(result)) throw new Error("auction recovery is not in progress");
+  }
+
+  async failRecovery(auctionId: bigint, error: string): Promise<void> {
+    this.database
+      .prepare(
+        `INSERT INTO auction_recoveries (auction_id, status, error, updated_at)
+         VALUES (?, 'failed', ?, ?)
+         ON CONFLICT (auction_id) DO UPDATE SET status = 'failed',
+           transaction_hash = NULL, error = excluded.error, updated_at = excluded.updated_at`,
+      )
+      .run(auctionId.toString(), error, Date.now());
+  }
+
+  async getAuctionCreation(requestId: string): Promise<AuctionCreationRecord | undefined> {
+    const row = this.database
+      .prepare("SELECT * FROM auction_creations WHERE request_id = ?")
+      .get(requestId) as AuctionCreationRow | undefined;
+    if (row === undefined) return undefined;
+    return {
+      requestId: row.request_id,
+      status: row.status,
+      updatedAt: row.updated_at,
+      ...(row.auction_id === null ? {} : { auctionId: BigInt(row.auction_id) }),
+      ...(row.transaction_hash === null ? {} : { transactionHash: row.transaction_hash }),
+      ...(row.error === null ? {} : { error: row.error }),
+    };
+  }
+
+  async claimAuctionCreation(requestId: string): Promise<boolean> {
+    const result = this.database
+      .prepare(
+        `INSERT INTO auction_creations (request_id, status, updated_at)
+         VALUES (?, 'pending', ?)
+         ON CONFLICT (request_id) DO UPDATE SET
+           status = 'pending', auction_id = NULL, transaction_hash = NULL,
+           error = NULL, updated_at = excluded.updated_at
+         WHERE auction_creations.status = 'failed'`,
+      )
+      .run(requestId, Date.now());
+    return changed(result);
+  }
+
+  async completeAuctionCreation(
+    requestId: string,
+    auctionId: bigint,
+    transactionHash: string,
+  ): Promise<void> {
+    const result = this.database
+      .prepare(
+        `UPDATE auction_creations SET status = 'completed', auction_id = ?,
+           transaction_hash = ?, error = NULL, updated_at = ?
+         WHERE request_id = ? AND status = 'pending'`,
+      )
+      .run(auctionId.toString(), transactionHash, Date.now(), requestId);
+    if (!changed(result)) throw new Error("auction creation is not pending");
+  }
+
+  async failAuctionCreation(requestId: string, error: string): Promise<void> {
+    this.database
+      .prepare(
+        `UPDATE auction_creations SET status = 'failed', error = ?, updated_at = ?
+         WHERE request_id = ? AND status = 'pending'`,
+      )
+      .run(error, Date.now(), requestId);
   }
 
   private updateSubmission(

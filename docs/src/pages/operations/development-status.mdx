@@ -5,7 +5,7 @@ description: What is implemented, what has been verified locally, and what remai
 
 # Development status
 
-Whisper's contract, headless SDK, encrypted capsule, and operator orchestration are implemented and verified locally. The current standard transfer + invoke bidder architecture has also completed the full Sepolia lifecycle against the canonical pool using the official Privacy SDK: private bid submission, discovery, acceptance, force reveal, and settlement. The interactive Ready Wallet handoff and additive top-up path still need live testing. The system remains experimental and unaudited.
+Whisper's contract, headless SDK, encrypted capsule, and operator orchestration are implemented and verified locally. The standard transfer + invoke architecture has completed the full Sepolia lifecycle, and an interactive Ready Wallet submission has exercised the deployed bidder path. The first test exposed an operator recipient-address bug before acceptance; the rejected notes were returned in one verified private recovery batch, the auction was marked aborted with that recovery transaction, and a fresh Ready bid was accepted successfully in the next coordinator-created round. Ready settlement and an additive top-up still need live testing. The system remains experimental and unaudited.
 
 ## Repository packages
 
@@ -57,6 +57,8 @@ vectors/    Cross-language transcript fixtures
 - stale work-lease recovery and deadline scheduling;
 - official Privacy SDK composition boundary;
 - proof-backed outside-execution relaying; and
+- dry-run-first, idempotent recovery for rejected and unfunded bid notes;
+- recovery-linked, replay-protected manual auction abort; and
 - startup validation without automatic onchain actions.
 
 ## Current local verification
@@ -64,7 +66,7 @@ vectors/    Cross-language transcript fixtures
 ```text
 Cairo contract tests   63 passing
 Headless SDK tests     13 passing
-Operator tests         19 passing
+Operator tests         29 passing
 ```
 
 Typechecking, production builds, Cairo formatting, and repository whitespace checks also pass.
@@ -91,6 +93,10 @@ The repository records the disposable vault, relayer, active v0.4 Whisper deploy
 The active smoke used `sncast` for public approval, auction creation, receipt checks, and contract readback. The official Privacy SDK built and proved the private standard transfer + invoke bid plus the operator-only acceptance and settlement batches; this is Wallet API-compatible action semantics, not a Ready interactive-wallet test. On the prior v0.4 deployment, Auction 2 completed the same lifecycle. Its first smoke auction intentionally remained unfunded after transaction-scoped discovery found two notes matching the committed amount; the operator rejected the ambiguous match instead of guessing a note ID. The previous v0.3 deployment's offchain settlement, Stake Wars reader verification, and ERC-20 escrow/reclaim smoke remain preserved as historical evidence in the deployment metadata.
 
 Two operational requirements were reconfirmed live. First, the relayer submitting an outside-execution proof must approve the pool to collect its public privacy fee. Second, a callback-only operator proof is rejected by the pool as `NO_REPLAY_PROTECTION`. Acceptance succeeded when the same batch consumed and reissued a separate vault-owned note, creating a nullifier while leaving the escrowed bid note untouched. After the force-reveal deadline, settlement consumed the accepted 0.1 STRK note and privately reissued 0.05 STRK of winner change plus 0.05 STRK of seller proceeds. Production automation still needs relayer fee monitoring plus a durable replay-note inventory and rotation policy.
+
+On 2026-08-27, a Ready Wallet submitted two bid transactions to a five-minute Stake Wars test round. The operator failed before funding because its replay rotation used the vault viewing public key where the Privacy SDK requires a registered account address. The adapter and proceeds default now use the vault account address, configuration rejects the known misconfiguration, and the operator test suite covers both paths. After the acceptance window closed, the recovery command authenticated both capsules, resolved exactly two unspent transaction-scoped notes, and confirmed one Sepolia private batch with two `NoteUsed` and two `EncNoteCreated` events. The recovery-linked abort then marked auction 2 terminal in transaction `0x0560333a3541aed1b1413f6b0301610af762b93dfd7fb66caab9d5f3ad787463`.
+
+The Stake Wars coordinator observed the abort and created pending start-on-bid auction 3 in transaction `0x053a4b0f63b4a223b0ed615a1242cf017c917a0809ca2cdfa60264c0f5c513e8`. Its first Ready bid started the five-minute clock, and the corrected operator discovered and accepted the private note in transaction `0x048ee4c8bdee29b21678f7f866e20f45f21cd7b9726e4392f0152d84430a1f01`. Direct RPC, the Stake Wars API, operator SQLite, and Torii all report one submitted and one funded tranche.
 
 ## First live test
 

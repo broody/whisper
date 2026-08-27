@@ -45,7 +45,6 @@ export interface OfficialVaultRuntimeOptions {
   poolAddress: bigint;
   whisperAddress: bigint;
   vaultAddress: bigint;
-  vaultPublicKey: bigint;
   replayTokenAddress: bigint;
   submitter: ProofSubmitter;
   provingBlockIdProvider?: () => Promise<BlockIdentifier>;
@@ -82,7 +81,6 @@ export async function createOfficialVaultRuntime(
       options.submitter,
       `0x${options.whisperAddress.toString(16)}`,
       options.vaultAddress,
-      options.vaultPublicKey,
       options.replayTokenAddress,
       options.provingBlockIdProvider,
     ),

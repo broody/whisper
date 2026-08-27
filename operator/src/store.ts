@@ -4,6 +4,7 @@ import type { BidSubmissionEvent } from "./types.ts";
 
 export type SubmissionStatus = "received" | "accepting" | "retry" | "funded" | "rejected";
 export type SettlementStatus = "pending" | "settling" | "retry" | "settled";
+export type RecoveryStatus = "recovering" | "failed" | "completed";
 
 export interface SubmissionRecord extends BidSubmissionEvent {
   status: SubmissionStatus;
@@ -16,6 +17,23 @@ export interface SubmissionRecord extends BidSubmissionEvent {
 export interface SettlementRecord {
   auctionId: bigint;
   status: SettlementStatus;
+  updatedAt: number;
+  transactionHash?: string;
+  error?: string;
+}
+
+export interface AuctionCreationRecord {
+  requestId: string;
+  status: "pending" | "completed" | "failed";
+  updatedAt: number;
+  auctionId?: bigint;
+  transactionHash?: string;
+  error?: string;
+}
+
+export interface RecoveryRecord {
+  auctionId: bigint;
+  status: RecoveryStatus;
   updatedAt: number;
   transactionHash?: string;
   error?: string;
@@ -47,7 +65,18 @@ export interface OperatorStore {
   getLastScannedBlock(): Promise<number | undefined>;
   setLastScannedBlock(blockNumber: number): Promise<void>;
   listProcessableSubmissions(limit: number): Promise<SubmissionRecord[]>;
+  listSubmissions(auctionId: bigint): Promise<SubmissionRecord[]>;
   recoverStaleWork(staleBefore: number): Promise<number>;
+
+  getRecovery(auctionId: bigint): Promise<RecoveryRecord | undefined>;
+  claimRecovery(auctionId: bigint): Promise<boolean>;
+  completeRecovery(auctionId: bigint, transactionHash: string): Promise<void>;
+  failRecovery(auctionId: bigint, error: string): Promise<void>;
+
+  getAuctionCreation(requestId: string): Promise<AuctionCreationRecord | undefined>;
+  claimAuctionCreation(requestId: string): Promise<boolean>;
+  completeAuctionCreation(requestId: string, auctionId: bigint, transactionHash: string): Promise<void>;
+  failAuctionCreation(requestId: string, error: string): Promise<void>;
 }
 
 function submissionKey(auctionId: bigint, bidHandle: bigint): string {
@@ -60,6 +89,8 @@ export class InMemoryOperatorStore implements OperatorStore {
   private readonly settlements = new Map<string, SettlementRecord>();
   private readonly auctions = new Set<string>();
   private lastScannedBlock?: number;
+  private readonly auctionCreations = new Map<string, AuctionCreationRecord>();
+  private readonly recoveries = new Map<string, RecoveryRecord>();
 
   async putCapsule(
     envelope: WhisperEncryptedCapsule,
@@ -183,6 +214,13 @@ export class InMemoryOperatorStore implements OperatorStore {
       .map((record) => structuredClone(record));
   }
 
+  async listSubmissions(auctionId: bigint): Promise<SubmissionRecord[]> {
+    return [...this.submissions.values()]
+      .filter((record) => record.auctionId === auctionId)
+      .sort((left, right) => left.blockNumber - right.blockNumber)
+      .map((record) => structuredClone(record));
+  }
+
   async recoverStaleWork(staleBefore: number): Promise<number> {
     let recovered = 0;
     for (const submission of this.submissions.values()) {
@@ -202,6 +240,65 @@ export class InMemoryOperatorStore implements OperatorStore {
       }
     }
     return recovered;
+  }
+
+  async getRecovery(auctionId: bigint): Promise<RecoveryRecord | undefined> {
+    const value = this.recoveries.get(auctionId.toString());
+    return value === undefined ? undefined : structuredClone(value);
+  }
+
+  async claimRecovery(auctionId: bigint): Promise<boolean> {
+    const key = auctionId.toString();
+    const current = this.recoveries.get(key);
+    if (current !== undefined && current.status !== "failed") return false;
+    this.recoveries.set(key, { auctionId, status: "recovering", updatedAt: Date.now() });
+    return true;
+  }
+
+  async completeRecovery(auctionId: bigint, transactionHash: string): Promise<void> {
+    this.recoveries.set(auctionId.toString(), {
+      auctionId,
+      status: "completed",
+      transactionHash,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async failRecovery(auctionId: bigint, error: string): Promise<void> {
+    this.recoveries.set(auctionId.toString(), {
+      auctionId,
+      status: "failed",
+      error,
+      updatedAt: Date.now(),
+    });
+  }
+
+  async getAuctionCreation(requestId: string): Promise<AuctionCreationRecord | undefined> {
+    const value = this.auctionCreations.get(requestId);
+    return value === undefined ? undefined : structuredClone(value);
+  }
+
+  async claimAuctionCreation(requestId: string): Promise<boolean> {
+    const current = this.auctionCreations.get(requestId);
+    if (current !== undefined && current.status !== "failed") return false;
+    this.auctionCreations.set(requestId, { requestId, status: "pending", updatedAt: Date.now() });
+    return true;
+  }
+
+  async completeAuctionCreation(
+    requestId: string,
+    auctionId: bigint,
+    transactionHash: string,
+  ): Promise<void> {
+    this.auctionCreations.set(requestId, {
+      requestId, status: "completed", updatedAt: Date.now(), auctionId, transactionHash,
+    });
+  }
+
+  async failAuctionCreation(requestId: string, error: string): Promise<void> {
+    this.auctionCreations.set(requestId, {
+      requestId, status: "failed", updatedAt: Date.now(), error,
+    });
   }
 
   private updateSubmission(

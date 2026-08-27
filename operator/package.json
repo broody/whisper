@@ -11,7 +11,9 @@
     "dist"
   ],
   "bin": {
-    "whisper-operator": "./dist/run.js"
+    "whisper-operator": "./dist/run.js",
+    "whisper-abort-auction": "./dist/abort-auction.js",
+    "whisper-recover-auction": "./dist/recover-auction.js"
   },
   "exports": {
     ".": {
@@ -23,6 +25,8 @@
     "prebuild": "pnpm --dir ../sdk build",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/run.js",
+    "abort": "node dist/abort-auction.js",
+    "recover": "node dist/recover-auction.js",
     "pretypecheck": "pnpm --dir ../sdk build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "pretest": "pnpm --dir ../sdk build",

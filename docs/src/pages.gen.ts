@@ -12,6 +12,7 @@ type Page =
   | { path: '/how-whisper-works'; render: 'static' }
   | { path: '/'; render: 'static' }
   | { path: '/operations/development-status'; render: 'static' }
+  | { path: '/operations/rejected-bid-recovery'; render: 'static' }
   | { path: '/security/privacy-and-trust'; render: 'static' }
 
 // prettier-ignore

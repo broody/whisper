@@ -18,6 +18,7 @@ import { StarknetWhisperChain } from "./starknet-chain.ts";
 import { OutsideExecutionSubmitter } from "./strk20-vault.ts";
 import type { ProceedsRecipientProvider } from "./types.ts";
 import { OperatorWorker } from "./worker.ts";
+import { AuctionCoordinator } from "./auction-coordinator.ts";
 
 export interface OperatorServiceDependencies {
   config: OperatorRuntimeConfig;
@@ -75,7 +76,6 @@ export async function createOperatorService(
       poolAddress: config.poolAddress,
       whisperAddress: config.whisperAddress,
       vaultAddress: config.vaultAddress,
-      vaultPublicKey: config.vaultPublicKey,
       replayTokenAddress: config.replayTokenAddress,
       submitter,
       provingBlockIdProvider: async () =>
@@ -142,6 +142,23 @@ export async function createOperatorService(
       },
       readiness: ready,
       allowedOrigins: config.allowedOrigins,
+      ...(config.coordinatorToken === undefined
+        ? {}
+        : {
+            coordinatorToken: config.coordinatorToken,
+            coordinator: new AuctionCoordinator({
+              provider: dependencies.provider,
+              relayerAccount: dependencies.relayerAccount,
+              store,
+              whisperAddress: config.whisperAddress,
+              vaultAddress: config.vaultAddress,
+              vaultPublicKey: config.vaultPublicKey,
+              revealPublicKey: config.revealPublicKey,
+              proceedsRecipient: config.proceedsRecipient,
+              getViewingKey: async () =>
+                BigInt(await dependencies.viewingKeyProvider.getViewingKey()),
+            }),
+          }),
     });
     return {
       chain,
