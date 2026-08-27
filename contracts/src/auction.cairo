@@ -73,7 +73,7 @@ pub mod WhisperAuction {
 
     #[event]
     #[derive(Drop, starknet::Event)]
-    enum Event {
+    pub enum Event {
         AuctionCreated: AuctionCreated,
         AuctionStarted: AuctionStarted,
         BidSubmitted: BidSubmitted,
@@ -90,106 +90,130 @@ pub mod WhisperAuction {
     }
 
     #[derive(Drop, starknet::Event)]
-    struct AuctionCreated {
+    pub struct AuctionCreated {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        creator: ContractAddress,
-        payment_token: ContractAddress,
-        metadata_hash: felt252,
-        fulfillment_kind: FulfillmentKind,
-        asset_token: ContractAddress,
-        asset_token_id: u256,
-        asset_amount: u256,
-        reserve_price: u128,
-        max_bids: u32,
-        schedule: AuctionSchedule,
-        started_at: u64,
-        bidding_deadline: u64,
-        force_reveal_after: u64,
-        abort_after: u64,
-        vault_address: ContractAddress,
-        reveal_public_key: felt252,
-        operator_identity_commitment: felt252,
+        pub creator: ContractAddress,
+        pub created_at: u64,
+        pub payment_token: ContractAddress,
+        pub proceeds_recipient_commitment: felt252,
+        pub metadata_hash: felt252,
+        pub fulfillment_kind: FulfillmentKind,
+        pub asset_token: ContractAddress,
+        pub asset_token_id: u256,
+        pub asset_amount: u256,
+        pub winner_payload_domain: felt252,
+        pub reserve_price: u128,
+        pub max_bids: u32,
+        pub schedule: AuctionSchedule,
+        pub started_at: u64,
+        pub bidding_deadline: u64,
+        pub force_reveal_after: u64,
+        pub abort_after: u64,
+        pub vault_address: ContractAddress,
+        pub vault_public_key: felt252,
+        pub reveal_public_key: felt252,
+        pub operator_identity_commitment: felt252,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct AuctionStarted {
+    pub struct AuctionStarted {
         #[key]
-        auction_id: u64,
-        started_at: u64,
-        bidding_deadline: u64,
-        force_reveal_after: u64,
-        abort_after: u64,
+        pub auction_id: u64,
+        pub started_at: u64,
+        pub bidding_deadline: u64,
+        pub force_reveal_after: u64,
+        pub abort_after: u64,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct BidSubmitted {
+    pub struct BidSubmitted {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        bid_handle: felt252,
-        group_handle: felt252,
-        tranche_index: u32,
-        submission_index: u32,
+        pub bid_handle: felt252,
+        #[key]
+        pub group_handle: felt252,
+        pub tranche_index: u32,
+        pub submission_index: u32,
+        pub auction_submission_count: u32,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct BidFunded {
+    pub struct BidFunded {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        bid_handle: felt252,
-        note_id: felt252,
-        bid_index: u32,
-        accepted_bids_hash: felt252,
+        pub bid_handle: felt252,
+        #[key]
+        pub group_handle: felt252,
+        pub note_id: felt252,
+        pub bid_index: u32,
+        pub auction_funded_tranche_count: u32,
+        pub group_funded_tranche_count: u32,
+        pub accepted_bids_hash: felt252,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct BidRevealed {
+    pub struct BidRevealed {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        bid_handle: felt252,
-        amount: u128,
+        pub bid_handle: felt252,
+        #[key]
+        pub group_handle: felt252,
+        pub tranche_index: u32,
+        pub bid_index: u32,
+        pub amount: u128,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct AuctionSettled {
+    pub struct AuctionSettled {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        winner_bid_handle: felt252,
-        winner_commitment: felt252,
-        winning_bid: u128,
-        second_highest_bid: u128,
-        clearing_price: u128,
-        reveals_root: felt252,
-        outputs_root: felt252,
-        settlement_hash: felt252,
+        pub winner_group_handle: felt252,
+        pub has_winner: bool,
+        pub winner_commitment: felt252,
+        pub winning_bid: u128,
+        pub second_highest_bid: u128,
+        pub clearing_price: u128,
+        pub submission_count: u32,
+        pub funded_tranche_count: u32,
+        pub funded_bid_count: u32,
+        pub eligible_bid_count: u32,
+        pub accepted_bids_hash: felt252,
+        pub reveals_root: felt252,
+        pub outputs_root: felt252,
+        pub settlement_hash: felt252,
+        pub settled_at: u64,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct AuctionAborted {
+    pub struct AuctionAborted {
         #[key]
-        auction_id: u64,
-        recovery_hash: felt252,
+        pub auction_id: u64,
+        pub recovery_hash: felt252,
+        pub submission_count: u32,
+        pub funded_tranche_count: u32,
+        pub aborted_at: u64,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct AssetClaimed {
+    pub struct AssetClaimed {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        recipient: ContractAddress,
+        pub recipient: ContractAddress,
     }
 
     #[derive(Drop, starknet::Event)]
-    struct AssetReclaimed {
+    pub struct AssetReclaimed {
         #[key]
-        auction_id: u64,
+        pub auction_id: u64,
         #[key]
-        seller: ContractAddress,
+        pub seller: ContractAddress,
     }
 
     #[constructor]
@@ -267,12 +291,15 @@ pub mod WhisperAuction {
                     AuctionCreated {
                         auction_id,
                         creator,
+                        created_at: now,
                         payment_token: config.payment_token,
+                        proceeds_recipient_commitment: config.proceeds_recipient_commitment,
                         metadata_hash: config.metadata_hash,
                         fulfillment_kind: config.fulfillment.kind,
                         asset_token: config.fulfillment.token,
                         asset_token_id: config.fulfillment.token_id,
                         asset_amount: config.fulfillment.amount,
+                        winner_payload_domain: config.winner_payload_domain,
                         reserve_price: config.reserve_price,
                         max_bids: config.max_bids,
                         schedule: config.schedule,
@@ -281,6 +308,7 @@ pub mod WhisperAuction {
                         force_reveal_after,
                         abort_after,
                         vault_address: config.vault_address,
+                        vault_public_key: config.vault_public_key,
                         reveal_public_key: config.reveal_public_key,
                         operator_identity_commitment: config.operator_identity_commitment,
                     },
@@ -865,6 +893,7 @@ pub mod WhisperAuction {
                         group_handle: bid.group_handle,
                         tranche_index: bid.tranche_index,
                         submission_index,
+                        auction_submission_count: auction.submission_count,
                     },
                 );
         }
@@ -902,8 +931,11 @@ pub mod WhisperAuction {
                     BidFunded {
                         auction_id: input.auction_id,
                         bid_handle: input.bid_handle,
+                        group_handle: bid.group_handle,
                         note_id: input.note_id,
                         bid_index,
+                        auction_funded_tranche_count: auction.bid_count,
+                        group_funded_tranche_count: group.funded_tranche_count,
                         accepted_bids_hash,
                     },
                 );
@@ -967,7 +999,12 @@ pub mod WhisperAuction {
                 self
                     .emit(
                         BidRevealed {
-                            auction_id, bid_handle: revealed.bid_handle, amount: revealed.amount,
+                            auction_id,
+                            bid_handle: revealed.bid_handle,
+                            group_handle: bid.group_handle,
+                            tranche_index: bid.tranche_index,
+                            bid_index,
+                            amount: revealed.amount,
                         },
                     );
                 index += 1;
@@ -984,6 +1021,9 @@ pub mod WhisperAuction {
                 }
                 index += 1;
             }
+
+            let funded_bid_count: u32 = group_handles.len().try_into().unwrap();
+            let eligible_bid_count: u32 = aggregate_bids.len().try_into().unwrap();
 
             let result = if aggregate_bids.is_empty() {
                 assert!(winner_bid_handle.is_zero(), "UNEXPECTED_WINNER");
@@ -1040,23 +1080,31 @@ pub mod WhisperAuction {
                 .emit(
                     AuctionSettled {
                         auction_id,
-                        winner_bid_handle: result.winner_bid_handle,
+                        winner_group_handle: result.winner_bid_handle,
+                        has_winner: result.has_winner,
                         winner_commitment: result.winner_commitment,
                         winning_bid: result.winning_bid,
                         second_highest_bid: result.second_highest_bid,
                         clearing_price: result.clearing_price,
+                        submission_count: auction.submission_count,
+                        funded_tranche_count: auction.bid_count,
+                        funded_bid_count,
+                        eligible_bid_count,
+                        accepted_bids_hash,
                         reveals_root,
                         outputs_root,
                         settlement_hash,
+                        settled_at: result.settled_at,
                     },
                 );
         }
 
         fn abort_auction(ref self: ContractState, input: AbortInput) {
             let mut auction = self.require_auction(input.auction_id);
+            let now = get_block_timestamp();
             assert!(auction.status != AuctionStatus::Pending, "AUCTION_NOT_STARTED");
             assert!(auction.status == AuctionStatus::Bidding, "NOT_ABORTABLE");
-            assert!(get_block_timestamp() >= auction.abort_after, "ABORT_TOO_EARLY");
+            assert!(now >= auction.abort_after, "ABORT_TOO_EARLY");
             assert!(input.recovery_hash.is_non_zero(), "ZERO_RECOVERY_HASH");
             auction.status = AuctionStatus::Aborted;
             auction.recovery_hash = input.recovery_hash;
@@ -1064,7 +1112,11 @@ pub mod WhisperAuction {
             self
                 .emit(
                     AuctionAborted {
-                        auction_id: input.auction_id, recovery_hash: input.recovery_hash,
+                        auction_id: input.auction_id,
+                        recovery_hash: input.recovery_hash,
+                        submission_count: auction.submission_count,
+                        funded_tranche_count: auction.bid_count,
+                        aborted_at: now,
                     },
                 );
         }

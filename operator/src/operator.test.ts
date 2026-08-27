@@ -609,8 +609,8 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
         return {
           events: [{
             from_address: hex(whisper),
-            keys: [bidSubmittedSelector, "0x7", "0xa"],
-            data: ["0x0"],
+            keys: [bidSubmittedSelector, "0x7", "0xa", "0x6e"],
+            data: ["0x0", "0x0", "0x1"],
             transaction_hash: "0xbbb",
             block_number: 121,
           }],
@@ -623,7 +623,11 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
         events: [
           { from_address: hex(pool), keys: [encNoteCreatedSelector, "0x65"], data: ["0x1"] },
           { from_address: hex(pool), keys: [encNoteCreatedSelector, "0x66"], data: ["0x2"] },
-          { from_address: hex(whisper), keys: [bidSubmittedSelector, "0x7", "0xa"], data: [] },
+          {
+            from_address: hex(whisper),
+            keys: [bidSubmittedSelector, "0x7", "0xa", "0x6e"],
+            data: [],
+          },
         ],
       };
     },

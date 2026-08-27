@@ -31,6 +31,17 @@ The first successful bid starts a pending auction atomically. Its block timestam
 
 Pending auctions cannot settle, abort, or release an escrowed asset. Because there is no creator-cancel entrypoint yet, a start-on-bid token lot remains escrowed until a first bid starts the auction and it later reaches a terminal path.
 
+## Indexable event history
+
+Every transaction-driven lifecycle transition emits a standard Starknet event, so a raw contract indexer can rebuild auction history without reading mutable storage. `auction_id`, `bid_handle`, and `group_handle` are event keys where applicable, which allows indexers to filter auction, tranche, and logical-bid histories directly. The stream distinguishes:
+
+- submitted tranches through `BidSubmitted.submission_index` and `auction_submission_count`;
+- funded tranches through `BidFunded.bid_index`, `auction_funded_tranche_count`, and `group_funded_tranche_count`;
+- tranche amounts revealed at settlement through `BidRevealed`; and
+- final logical-bid counts, eligibility counts, winner, price, accepted-set hash, and transcript roots through `AuctionSettled`.
+
+An initial bid and its top-ups share a `group_handle`, so logical bid counts are not wallet counts. Bidder wallet identity remains private. `AuctionCreated` contains the full immutable auction configuration, while `AuctionStarted`, `AuctionAborted`, `AssetClaimed`, and `AssetReclaimed` cover the remaining lifecycle paths. Deadline passage itself emits no event because it does not execute a transaction; consumers derive time-based availability from the indexed deadlines and current chain time.
+
 ## Fulfillment
 
 `AuctionConfig.fulfillment` is required and has four kinds: `Offchain`, `Erc20`, `Erc721`, and `Erc1155`. Offchain auctions require zero token fields and let applications such as Stake Wars interpret the generic `winner_commitment`. Token auctions require the seller to approve `WhisperAuction` before calling `create_auction`; the same transaction pulls and verifies the lot before the auction opens, so a failure rolls everything back.

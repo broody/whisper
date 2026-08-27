@@ -160,9 +160,11 @@ The `BidSubmitted` event exposes:
 - `bid_handle`;
 - `group_handle` and `tranche_index`;
 - the source transaction hash and block through the Starknet event envelope; and
-- a submission index.
+- a zero-based submission index and the resulting auction submission count.
 
 It does not expose the bid amount or salt.
+
+When the operator accepts a matching note, `BidFunded` publishes the zero-based funded-tranche index, the resulting auction and group funded-tranche counts, and the rolling accepted-set hash. At settlement, one `BidRevealed` event publishes each funded tranche amount and its group, followed by `AuctionSettled` with the funded logical-bid count, eligible-bid count, winning group, winning bid, second-highest bid, and clearing price. These are standard Starknet events and can be replayed by a raw contract indexer without reading mutable auction storage.
 
 ## 7. The operator discovers and accepts the note
 

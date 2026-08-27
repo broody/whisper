@@ -1,6 +1,7 @@
 use snforge_std::{
-    CheatSpan, ContractClassTrait, DeclareResultTrait, cheat_caller_address, declare,
-    start_cheat_block_timestamp, start_cheat_caller_address, stop_cheat_caller_address,
+    CheatSpan, ContractClassTrait, DeclareResultTrait, EventSpyAssertionsTrait,
+    cheat_caller_address, declare, spy_events, start_cheat_block_timestamp,
+    start_cheat_caller_address, stop_cheat_caller_address,
 };
 use starknet::{ClassHash, ContractAddress, SyscallResultTrait};
 use crate::asset_hashes::{ASSET_WINNER_DOMAIN, compute_asset_winner_commitment};
@@ -9,6 +10,10 @@ use crate::asset_interface::{
     IERC20AssetDispatcherTrait, IERC721AssetDispatcher, IERC721AssetDispatcherTrait,
 };
 use crate::asset_types::{AuctionFulfillment, FulfillmentKind, FulfillmentStatus};
+use crate::auction::WhisperAuction::{
+    AuctionAborted, AuctionCreated, AuctionSettled, AuctionStarted, BidFunded, BidRevealed,
+    BidSubmitted, Event as WhisperEvent,
+};
 use crate::hashes::{
     compute_bid_group_handle, compute_bid_handle, compute_operator_identity_commitment,
     compute_reveal_commitment,
@@ -422,8 +427,8 @@ fn third_party_cannot_accept_ownership() {
 }
 
 #[test]
-// Baseline: ~21,037,630 L2 gas and ~3,264 L1 data gas.
-#[available_gas(l1_data_gas: 4_000, l2_gas: 25_000_000)]
+// Baseline: ~23,400,150 L2 gas and ~3,648 L1 data gas.
+#[available_gas(l1_data_gas: 4_500, l2_gas: 29_000_000)]
 fn wallet_invoke_submits_unfunded_bid() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -436,8 +441,141 @@ fn wallet_invoke_submits_unfunded_bid() {
 }
 
 #[test]
-// Baseline: ~28,594,414 L2 gas and ~3,840 L1 data gas.
-#[available_gas(l1_data_gas: 4_500, l2_gas: 34_000_000)]
+// Baseline: ~12,825,544 L2 gas and ~2,400 L1 data gas.
+#[available_gas(l1_data_gas: 3_000, l2_gas: 16_000_000)]
+fn emits_complete_auction_creation_history() {
+    let auction = deploy();
+    let token = address(0x501);
+    let expected = config(token);
+    set_context(auction, 100, creator_address());
+    let mut spy = spy_events();
+    let auction_id = auction.create_auction(expected);
+
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::AuctionCreated(
+                        AuctionCreated {
+                            auction_id,
+                            creator: creator_address(),
+                            created_at: 100,
+                            payment_token: token,
+                            proceeds_recipient_commitment: expected.proceeds_recipient_commitment,
+                            metadata_hash: expected.metadata_hash,
+                            fulfillment_kind: expected.fulfillment.kind,
+                            asset_token: expected.fulfillment.token,
+                            asset_token_id: expected.fulfillment.token_id,
+                            asset_amount: expected.fulfillment.amount,
+                            winner_payload_domain: expected.winner_payload_domain,
+                            reserve_price: expected.reserve_price,
+                            max_bids: expected.max_bids,
+                            schedule: expected.schedule,
+                            started_at: 100,
+                            bidding_deadline: BID_DEADLINE,
+                            force_reveal_after: REVEAL_AFTER,
+                            abort_after: ABORT_AFTER,
+                            vault_address: expected.vault_address,
+                            vault_public_key: expected.vault_public_key,
+                            reveal_public_key: expected.reveal_public_key,
+                            operator_identity_commitment: expected.operator_identity_commitment,
+                        },
+                    ),
+                ),
+            ],
+        );
+}
+
+#[test]
+// Baseline: ~45,862,068 L2 gas and ~5,376 L1 data gas.
+#[available_gas(l1_data_gas: 6_500, l2_gas: 56_000_000)]
+fn emits_indexable_submission_and_funding_counts() {
+    let auction = deploy();
+    let auction_id = create_auction(auction, address(0x501));
+    let mut submission_spy = spy_events();
+    let first = submit_bid(auction, auction_id, 0xabc, 0x704, 50, 0x705);
+    let group_handle = auction.get_bid(auction_id, first).group_handle;
+    let top_up = add_bid_tranche(auction, auction_id, group_handle, 0x706, 30, 0x707);
+
+    submission_spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidSubmitted(
+                        BidSubmitted {
+                            auction_id,
+                            bid_handle: first,
+                            group_handle,
+                            tranche_index: 0,
+                            submission_index: 0,
+                            auction_submission_count: 1,
+                        },
+                    ),
+                ),
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidSubmitted(
+                        BidSubmitted {
+                            auction_id,
+                            bid_handle: top_up,
+                            group_handle,
+                            tranche_index: 1,
+                            submission_index: 1,
+                            auction_submission_count: 2,
+                        },
+                    ),
+                ),
+            ],
+        );
+
+    let mut funding_spy = spy_events();
+    accept_bid(auction, auction_id, first, 0x704);
+    let first_funding = auction.get_auction(auction_id);
+    accept_bid(auction, auction_id, top_up, 0x706);
+    let second_funding = auction.get_auction(auction_id);
+
+    funding_spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidFunded(
+                        BidFunded {
+                            auction_id,
+                            bid_handle: first,
+                            group_handle,
+                            note_id: 0x704,
+                            bid_index: 0,
+                            auction_funded_tranche_count: 1,
+                            group_funded_tranche_count: 1,
+                            accepted_bids_hash: first_funding.accepted_bids_hash,
+                        },
+                    ),
+                ),
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidFunded(
+                        BidFunded {
+                            auction_id,
+                            bid_handle: top_up,
+                            group_handle,
+                            note_id: 0x706,
+                            bid_index: 1,
+                            auction_funded_tranche_count: 2,
+                            group_funded_tranche_count: 2,
+                            accepted_bids_hash: second_funding.accepted_bids_hash,
+                        },
+                    ),
+                ),
+            ],
+        );
+}
+
+#[test]
+// Baseline: ~31,526,564 L2 gas and ~4,224 L1 data gas.
+#[available_gas(l1_data_gas: 5_200, l2_gas: 39_000_000)]
 fn operator_accepts_discovered_vault_note() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -517,7 +655,25 @@ fn start_on_bid_resolves_deadlines_from_first_bid() {
     assert_eq!(pending.force_reveal_after, 0);
     assert_eq!(pending.abort_after, 0);
 
+    let mut spy = spy_events();
     submit_bid(auction, auction_id, 0xabc, 0x704, 30, 0x705);
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::AuctionStarted(
+                        AuctionStarted {
+                            auction_id,
+                            started_at: 150,
+                            bidding_deadline: 250,
+                            force_reveal_after: 270,
+                            abort_after: 350,
+                        },
+                    ),
+                ),
+            ],
+        );
     let started = auction.get_auction(auction_id);
     assert_eq!(started.status, AuctionStatus::Bidding);
     assert_eq!(started.started_at, 150);
@@ -657,8 +813,8 @@ fn rejects_computed_command_not_forwarded_by_pool() {
 }
 
 #[test]
-// Baseline: ~76,911,588 L2 gas and ~8,832 L1 data gas.
-#[available_gas(l1_data_gas: 10_500, l2_gas: 92_000_000)]
+// Baseline: ~82,139,368 L2 gas and ~9,216 L1 data gas.
+#[available_gas(l1_data_gas: 11_500, l2_gas: 100_000_000)]
 fn settles_operator_accepted_vickrey_result() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -702,8 +858,38 @@ fn accepts_bid_without_configured_ceiling() {
 fn settles_empty_auction_without_winner() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
+    let accepted_bids_hash = auction.get_auction(auction_id).accepted_bids_hash;
+    let mut spy = spy_events();
     settle(auction, auction_id, array![].span(), 0);
     assert!(!auction.get_result(auction_id).has_winner);
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::AuctionSettled(
+                        AuctionSettled {
+                            auction_id,
+                            winner_group_handle: 0,
+                            has_winner: false,
+                            winner_commitment: 0,
+                            winning_bid: 0,
+                            second_highest_bid: 0,
+                            clearing_price: 0,
+                            submission_count: 0,
+                            funded_tranche_count: 0,
+                            funded_bid_count: 0,
+                            eligible_bid_count: 0,
+                            accepted_bids_hash,
+                            reveals_root: 0x901,
+                            outputs_root: 0x902,
+                            settlement_hash: 0x903,
+                            settled_at: REVEAL_AFTER,
+                        },
+                    ),
+                ),
+            ],
+        );
 }
 
 #[test]
@@ -717,10 +903,28 @@ fn operator_aborts_after_timeout() {
             PrivacyRequest::Abort(AbortInput { auction_id, recovery_hash: 0xa01 }),
         );
     set_context(auction, ABORT_AFTER, pool_address());
+    let mut spy = spy_events();
     privacy(auction).privacy_invoke_with_computation(command);
     let state = auction.get_auction(auction_id);
     assert_eq!(state.status, AuctionStatus::Aborted);
     assert_eq!(state.recovery_hash, 0xa01);
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::AuctionAborted(
+                        AuctionAborted {
+                            auction_id,
+                            recovery_hash: 0xa01,
+                            submission_count: 0,
+                            funded_tranche_count: 0,
+                            aborted_at: ABORT_AFTER,
+                        },
+                    ),
+                ),
+            ],
+        );
 }
 
 #[test]
@@ -748,8 +952,8 @@ fn accepts_additive_bid_tranche() {
 }
 
 #[test]
-// Baseline: ~72,666,832 L2 gas and ~8,256 L1 data gas.
-#[available_gas(l1_data_gas: 9_800, l2_gas: 87_000_000)]
+// Baseline: ~79,549,392 L2 gas and ~8,640 L1 data gas.
+#[available_gas(l1_data_gas: 10_500, l2_gas: 96_000_000)]
 fn aggregates_tranches_before_vickrey_pricing() {
     let auction = deploy();
     let auction_id = create_auction(auction, address(0x501));
@@ -765,11 +969,82 @@ fn aggregates_tranches_before_vickrey_pricing() {
         RevealedBid { bid_handle: top_up, amount: 30, salt: 0x707 },
         RevealedBid { bid_handle: competitor, amount: 60, salt: 0x709 },
     ];
+    let competitor_group = auction.get_bid(auction_id, competitor).group_handle;
+    let winner_commitment = auction.get_bid_group(auction_id, group_handle).winner_commitment;
+    let accepted_bids_hash = auction.get_auction(auction_id).accepted_bids_hash;
+    let mut spy = spy_events();
     settle(auction, auction_id, revealed.span(), group_handle);
     let result = auction.get_result(auction_id);
     assert_eq!(result.winning_bid, 80);
     assert_eq!(result.second_highest_bid, 60);
     assert_eq!(result.clearing_price, 60);
+    spy
+        .assert_emitted(
+            @array![
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidRevealed(
+                        BidRevealed {
+                            auction_id,
+                            bid_handle: first,
+                            group_handle,
+                            tranche_index: 0,
+                            bid_index: 0,
+                            amount: 50,
+                        },
+                    ),
+                ),
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidRevealed(
+                        BidRevealed {
+                            auction_id,
+                            bid_handle: top_up,
+                            group_handle,
+                            tranche_index: 1,
+                            bid_index: 1,
+                            amount: 30,
+                        },
+                    ),
+                ),
+                (
+                    auction.contract_address,
+                    WhisperEvent::BidRevealed(
+                        BidRevealed {
+                            auction_id,
+                            bid_handle: competitor,
+                            group_handle: competitor_group,
+                            tranche_index: 0,
+                            bid_index: 2,
+                            amount: 60,
+                        },
+                    ),
+                ),
+                (
+                    auction.contract_address,
+                    WhisperEvent::AuctionSettled(
+                        AuctionSettled {
+                            auction_id,
+                            winner_group_handle: group_handle,
+                            has_winner: true,
+                            winner_commitment,
+                            winning_bid: 80,
+                            second_highest_bid: 60,
+                            clearing_price: 60,
+                            submission_count: 3,
+                            funded_tranche_count: 3,
+                            funded_bid_count: 2,
+                            eligible_bid_count: 2,
+                            accepted_bids_hash,
+                            reveals_root: 0x901,
+                            outputs_root: 0x902,
+                            settlement_hash: 0x903,
+                            settled_at: REVEAL_AFTER,
+                        },
+                    ),
+                ),
+            ],
+        );
 }
 
 #[test]
@@ -1056,9 +1331,8 @@ fn bid_equal_to_reserve_wins_and_pays_reserve() {
 }
 
 #[test]
-// Baseline: ~4,633,408,560 L2 gas and ~470,304 L1 data gas for the full
-// lifecycle; the 256-reveal settlement callback itself is ~406,466,644 L2 gas.
-#[available_gas(l1_data_gas: 565_000, l2_gas: 5_560_000_000)]
+// Baseline: ~4,850,718,750 L2 gas and ~470,688 L1 data gas for the full lifecycle.
+#[available_gas(l1_data_gas: 570_000, l2_gas: 5_800_000_000)]
 fn settles_maximum_supported_bid_set() {
     let auction = deploy();
     let mut maximum = config(address(0x501));
@@ -1167,8 +1441,8 @@ fn submit_and_accept_asset_bid(
 }
 
 #[test]
-// Baseline: ~48,412,746 L2 gas and ~5,760 L1 data gas.
-#[available_gas(l1_data_gas: 6_800, l2_gas: 58_000_000)]
+// Baseline: ~52,428,216 L2 gas and ~6,144 L1 data gas.
+#[available_gas(l1_data_gas: 7_600, l2_gas: 64_000_000)]
 fn escrows_erc20_and_delivers_it_to_committed_winner() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -1207,8 +1481,8 @@ fn escrows_erc20_and_delivers_it_to_committed_winner() {
 }
 
 #[test]
-// Baseline: ~26,126,656 L2 gas and ~3,264 L1 data gas.
-#[available_gas(l1_data_gas: 3_800, l2_gas: 31_000_000)]
+// Baseline: ~29,073,376 L2 gas and ~3,648 L1 data gas.
+#[available_gas(l1_data_gas: 4_500, l2_gas: 36_000_000)]
 fn returns_erc721_to_seller_when_auction_has_no_winner() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -1232,8 +1506,8 @@ fn returns_erc721_to_seller_when_auction_has_no_winner() {
 }
 
 #[test]
-// Baseline: ~20,610,374 L2 gas and ~2,784 L1 data gas.
-#[available_gas(l1_data_gas: 3_300, l2_gas: 25_000_000)]
+// Baseline: ~22,960,774 L2 gas and ~3,168 L1 data gas.
+#[available_gas(l1_data_gas: 4_000, l2_gas: 29_000_000)]
 fn returns_erc1155_after_unfinalized_auction_expires() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -1370,8 +1644,8 @@ fn rejects_unsolicited_erc721_safe_transfer() {
 }
 
 #[test]
-// Baseline: ~46,777,426 L2 gas and ~5,760 L1 data gas.
-#[available_gas(l1_data_gas: 6_800, l2_gas: 56_000_000)]
+// Baseline: ~50,562,416 L2 gas and ~6,144 L1 data gas.
+#[available_gas(l1_data_gas: 7_600, l2_gas: 62_000_000)]
 fn delivers_erc721_to_committed_winner() {
     let auction = deploy();
     let seller = address(0xa11ce);
@@ -1403,8 +1677,8 @@ fn delivers_erc721_to_committed_winner() {
 }
 
 #[test]
-// Baseline: ~48,579,866 L2 gas and ~5,952 L1 data gas.
-#[available_gas(l1_data_gas: 7_100, l2_gas: 58_000_000)]
+// Baseline: ~52,364,856 L2 gas and ~6,336 L1 data gas.
+#[available_gas(l1_data_gas: 7_800, l2_gas: 64_000_000)]
 fn delivers_erc1155_to_committed_winner() {
     let auction = deploy();
     let seller = address(0xa11ce);
