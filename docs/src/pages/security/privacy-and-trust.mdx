@@ -11,7 +11,7 @@ Whisper is confidential from the public and other bidders before settlement. It 
 
 | Party | Before settlement | After settlement |
 |---|---|---|
-| Public observer | Commitments, note ID, timing, counts | Accepted amounts, winner, clearing price, transcript roots |
+| Public observer | Commitments, note ID, timing, counts | Accepted amounts, winner commitment, clearing price, transcript roots; a consumer may separately publish the winning refund address |
 | Other bidder | Same public data; only their own private note/capsule | Same settlement data; only their own private outputs |
 | Operator | Every discovered vault note and decrypted capsule | Complete auction and all vault outputs |
 | Auditor under the protocol's disclosure path | Scoped history available through the registered auditor mechanism | Same, limited to disclosed key scope |
@@ -35,8 +35,15 @@ The operator can learn bids early. “Sealed bid” here means sealed against th
 | Still private | Newly public |
 |---|---|
 | Wallet ownership of bid and output notes | Every accepted bid amount and salt |
-| Refund, change, and seller note recipients | Winning bid, second-highest bid, clearing price |
+| Losing refund, change, and seller note recipients | Winning bid, second-highest bid, clearing price |
 | Vault viewing key and channel keys | Winner commitment and settlement roots |
+
+An authenticated consumer may opt into the operator's post-settlement winner
+endpoint when its prize convention uses the refund recipient as the winner.
+The operator then discloses only that winning address; the consumer decides
+whether to publish it. This adds no new bidder information to the operator,
+which already decrypts every capsule, but it intentionally makes the winner
+public if the consumer republishes the result.
 
 The current Cairo settlement must receive the accepted openings to verify Vickrey pricing, so bid amounts do not remain secret forever.
 

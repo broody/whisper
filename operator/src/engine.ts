@@ -23,6 +23,7 @@ import {
   type SettlementReveal,
   type VaultNote,
   type VaultPort,
+  type WinnerDisclosure,
   type WhisperChainPort,
 } from "./types.ts";
 
@@ -214,11 +215,75 @@ export class WhisperOperator {
       throw error;
     }
   }
+
+  /**
+   * Disclose only the refund recipient committed by the verified winning bid,
+   * and only after the canonical auction result is available onchain.
+   */
+  async getWinnerDisclosure(auctionId: bigint): Promise<WinnerDisclosure> {
+    const { chain, store } = this.dependencies;
+    const auction = await chain.getAuction(auctionId);
+    if (auction.status === "aborted") return { status: "aborted", auctionId };
+    if (auction.status !== "settled") return { status: "pending", auctionId };
+
+    const result = await chain.getResult(auctionId);
+    if (result.auctionId !== auctionId) throw new Error("auction result ID mismatch");
+    if (result.settlementHash === 0n || result.settlementHash !== auction.settlementHash) {
+      throw new Error("auction result settlement hash mismatch");
+    }
+    if (!result.hasWinner) return { status: "no-winner", auctionId };
+    if (result.winnerBidHandle === 0n || result.winnerCommitment === 0n) {
+      throw new Error("auction result winner is incomplete");
+    }
+
+    const bids = await chain.getAcceptedBids(auctionId);
+    const winnerBids = bids.filter(
+      (bid) => bid.funded && bid.groupHandle === result.winnerBidHandle,
+    );
+    if (winnerBids.length === 0) throw new Error("winning bid group is unavailable");
+
+    let winnerAddress: bigint | undefined;
+    for (const bid of winnerBids) {
+      if (bid.winnerCommitment !== result.winnerCommitment) {
+        throw new Error("winning bid commitment does not match the result");
+      }
+      const envelope = await store.getCapsule(bid.revealCommitment);
+      if (envelope === undefined) throw new Error("winning bid capsule is unavailable");
+      const opening = await this.dependencies.capsules.decrypt(envelope, {
+        auctionId,
+        revealCommitment: bid.revealCommitment,
+      });
+      validateBidOpening(bid, opening);
+      const recipient = BigInt(opening.refundRecipient);
+      if (winnerAddress !== undefined && winnerAddress !== recipient) {
+        throw new Error("winning bid group has inconsistent recipients");
+      }
+      winnerAddress = recipient;
+    }
+    if (winnerAddress === undefined) throw new Error("winning address is unavailable");
+    return {
+      status: "winner",
+      auctionId,
+      winnerGroupHandle: result.winnerBidHandle,
+      winnerCommitment: result.winnerCommitment,
+      address: winnerAddress,
+    };
+  }
 }
 
 function validateOpening(
   bid: BidView,
   note: VaultNote,
+  openingInput: WhisperBidOpening,
+): void {
+  validateBidOpening(bid, openingInput);
+  if (note.amount !== BigInt(openingInput.amount)) {
+    throw new RejectedBidError("vault note amount mismatch");
+  }
+}
+
+function validateBidOpening(
+  bid: BidView,
   openingInput: WhisperBidOpening,
 ): void {
   const opening = {
@@ -246,7 +311,6 @@ function validateOpening(
   ) {
     throw new RejectedBidError("capsule reveal commitment mismatch");
   }
-  if (note.amount !== opening.amount) throw new RejectedBidError("vault note amount mismatch");
 }
 
 function buildOutputs(

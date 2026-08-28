@@ -44,7 +44,7 @@ flowchart TB
 | `operator/src/recovery.ts` | Verifies and returns exact notes for rejected, unfunded bids |
 | `operator/src/recover-auction.ts` | Provides the dry-run-first manual recovery command |
 | `operator/src/sqlite-store.ts` | Persists capsules, submissions, auctions, recoveries, leases, cursor, and idempotency state |
-| `operator/src/api.ts` | Exposes health, public vault configuration, and idempotent capsule upload endpoints |
+| `operator/src/api.ts` | Exposes health, public vault configuration, idempotent capsule upload, authenticated coordination, and post-settlement winner disclosure endpoints |
 | `operator/src/service.ts` | Assembles and validates the service without starting transactions automatically |
 
 ## Event scanning
@@ -93,6 +93,17 @@ The encrypted capsule is addressed by `reveal_commitment`. After decryption, the
 6. the acceptance deadline.
 
 No bid is accepted unless capsule authentication and every note/commitment check succeed. Commitment mismatches, wrong amounts, closed acceptance windows, and ambiguous notes are rejected; missing capsules, temporary key-provider errors, and discovery lag remain retryable.
+
+## Optional winner disclosure
+
+When a coordinator token is configured, an authenticated consumer may call
+`GET /v1/auctions/<auction-id>/winner`. Before settlement it returns no address.
+After settlement, the operator reads the canonical result, selects only the
+winning group, decrypts its stored capsules, and revalidates the reveal,
+winner, and refund commitments before returning the committed refund
+recipient. This supports applications that intentionally use the same address
+for refunds and prize control without publishing losing recipients or storing
+a browser-side claim secret.
 
 ## Durable work and idempotency
 

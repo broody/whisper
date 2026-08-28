@@ -163,6 +163,12 @@ Whisper deliberately does not define the prize. `winner_commitment` can represen
 
 The consumer decides how to verify or redeem that commitment. Whisper only publishes the commitment belonging to the verified winning bid.
 
+The operator can optionally disclose the winning group's committed refund
+recipient to an authenticated consumer after settlement. This is an offchain
+application convention, not a Cairo fulfillment rule: it is appropriate only
+when the bidder intentionally chose the same address for refunds and prize
+control. Losing recipients are never returned by that endpoint.
+
 Stake Wars selects the explicit `Offchain` kind for controller fulfillment. ERC-20, ERC-721, and ERC-1155 auctions select the matching kind in the same creation interface; Whisper deposits the token before opening the auction and verifies a domain-separated recipient/secret opening after settlement. See [Auction fulfillment](/auctions/fulfillment).
 
 ## Abort and recovery

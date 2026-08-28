@@ -17,7 +17,7 @@ Bidder proving is not an operator responsibility. A compatible privacy wallet ex
 - `OperatorWorker`: finalized-block scanning, durable cursors, stale-lease recovery, bid processing, and deadline settlement scheduling.
 - `createOfficialVaultRuntime`: exact `createPrivateTransfers(...)` composition for hosted proving and indexed discovery.
 - `createOperatorService`: validates the chain, pool, vault address, viewing key, and reveal key before listening.
-- `createOperatorApi`: `GET /healthz`, replay-aware `GET /readyz`, `GET /v1/config`, idempotent `POST /v1/capsules`, and an optional authenticated coordinator endpoint.
+- `createOperatorApi`: `GET /healthz`, replay-aware `GET /readyz`, `GET /v1/config`, idempotent `POST /v1/capsules`, plus optional authenticated coordinator and settled-winner disclosure endpoints.
 
 The pool receipt adapter reads every `EncNoteCreated` ID from the bid transaction, then the engine intersects those IDs with notes decryptable by the vault for the configured token. The encrypted capsule is authenticated before matching, zero amount-matching notes remain retryable while discovery catches up, and multiple matching notes are rejected. Unrelated private change is allowed. At settlement, accepted tranches sharing a group handle are summed before Vickrey pricing and use one committed refund/winner route.
 
@@ -58,13 +58,18 @@ The public runtime configuration is loaded by `loadOperatorRuntimeConfig`. Signi
 `WHISPER_DATABASE_PATH` contains encrypted capsules and idempotency state, not these keys. For production, place capsule rate limiting and request authentication policy at the gateway, run one scheduler leader per database, and deploy this process separately from latency-sensitive game APIs.
 
 When `WHISPER_COORDINATOR_TOKEN` is configured, the operator also exposes
-`POST /v1/coordinator/auctions`. The bearer-authenticated endpoint accepts only
+`POST /v1/coordinator/auctions` and
+`GET /v1/auctions/<auction-id>/winner`. The bearer-authenticated creation endpoint accepts only
 the public per-round fields, fixes the vault, reveal, proceeds, and operator
 identity fields from validated runtime configuration, submits `create_auction`
-through the relayer, and persists its request ID for idempotent retries. Keep
-this token server-only and terminate public access at a private gateway or
-loopback listener; capsule uploads remain unauthenticated so the bidder wallet
-is not linked to its sealed bid.
+through the relayer, and persists its request ID for idempotent retries. The
+winner endpoint returns no address before settlement; afterward it matches the
+onchain winning group, decrypts and revalidates that group's capsules, and
+returns only their committed refund recipient. Consumers may publish that
+address when their prize convention defines the refund recipient as the
+winner. Keep the token server-only and terminate these endpoints at a private
+gateway or loopback listener; capsule uploads remain unauthenticated so the
+bidder wallet is not linked to its sealed bid.
 
 `createOperatorService(...)` returns the validated service components. Call `ready()`, then `listen()` and `worker.run(abortSignal)`; readiness verifies the chain configuration, key identities, and presence of a mature replay note. Vault registration remains a separate explicit `registerVault()` action so process startup can never create an onchain transaction accidentally.
 

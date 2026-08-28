@@ -36,6 +36,7 @@ export interface AuctionView {
   acceptedBidsHash: bigint;
   bidCount: number;
   status: AuctionStatus;
+  settlementHash: bigint;
 }
 
 export interface BidView {
@@ -50,6 +51,30 @@ export interface BidView {
   funded: boolean;
   settled: boolean;
 }
+
+export interface AuctionResultView {
+  auctionId: bigint;
+  hasWinner: boolean;
+  winnerBidHandle: bigint;
+  winnerCommitment: bigint;
+  winningBid: bigint;
+  secondHighestBid: bigint;
+  clearingPrice: bigint;
+  revealsRoot: bigint;
+  outputsRoot: bigint;
+  settlementHash: bigint;
+  settledAt: number;
+}
+
+export type WinnerDisclosure =
+  | { status: "pending" | "aborted" | "no-winner"; auctionId: bigint }
+  | {
+      status: "winner";
+      auctionId: bigint;
+      winnerGroupHandle: bigint;
+      winnerCommitment: bigint;
+      address: bigint;
+    };
 
 export interface BidSubmissionEvent {
   auctionId: bigint;
@@ -124,6 +149,7 @@ export interface RecoveryPlan {
 
 export interface WhisperChainPort {
   getAuction(auctionId: bigint): Promise<AuctionView>;
+  getResult(auctionId: bigint): Promise<AuctionResultView>;
   getBid(auctionId: bigint, bidHandle: bigint): Promise<BidView>;
   getAcceptedBids(auctionId: bigint): Promise<BidView[]>;
   candidateVaultNoteIds(

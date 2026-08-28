@@ -5,6 +5,7 @@ import {
 } from "starknet";
 
 import type {
+  AuctionResultView,
   AuctionSchedule,
   AuctionStatus,
   AuctionView,
@@ -94,6 +95,7 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
       acceptedBidsHash: field(values, 27),
       bidCount: safeNumber("bidCount", field(values, 29)),
       status: auctionStatus(field(values, 30)),
+      settlementHash: field(values, 31),
     };
   }
 
@@ -117,6 +119,30 @@ export class StarknetWhisperChain implements WhisperChainPort, WhisperEventSourc
       winnerCommitment: field(values, 7),
       funded: boolField("funded", field(values, 9)),
       settled: boolField("settled", field(values, 10)),
+    };
+  }
+
+  async getResult(auctionId: bigint): Promise<AuctionResultView> {
+    const values = await this.provider.callContract({
+      contractAddress: hex(this.whisperAddress),
+      entrypoint: "get_result",
+      calldata: [hex(auctionId)],
+    });
+    if (values.length !== 11) {
+      throw new Error(`unexpected Whisper AuctionResult response length: ${values.length}`);
+    }
+    return {
+      auctionId: field(values, 0),
+      hasWinner: boolField("hasWinner", field(values, 1)),
+      winnerBidHandle: field(values, 2),
+      winnerCommitment: field(values, 3),
+      winningBid: field(values, 4),
+      secondHighestBid: field(values, 5),
+      clearingPrice: field(values, 6),
+      revealsRoot: field(values, 7),
+      outputsRoot: field(values, 8),
+      settlementHash: field(values, 9),
+      settledAt: safeNumber("settledAt", field(values, 10)),
     };
   }
 

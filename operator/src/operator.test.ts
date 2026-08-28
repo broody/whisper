@@ -39,6 +39,7 @@ import { SqliteOperatorStore } from "./sqlite-store.ts";
 import { InMemoryOperatorStore, type OperatorStore } from "./store.ts";
 import { Strk20VaultClient, type PrivateTransfersLike } from "./strk20-vault.ts";
 import type {
+  AuctionResultView,
   AuctionView,
   BidSubmissionEvent,
   BidView,
@@ -62,9 +63,15 @@ class MemoryChain implements WhisperChainPort {
   readonly bids = new Map<string, BidView>();
   readonly candidates = new Map<string, bigint[]>();
   auction!: AuctionView;
+  result?: AuctionResultView;
 
   async getAuction(): Promise<AuctionView> {
     return { ...this.auction };
+  }
+
+  async getResult(): Promise<AuctionResultView> {
+    if (this.result === undefined) throw new Error("missing result");
+    return { ...this.result };
   }
 
   async getBid(auctionId: bigint, bidHandle: bigint): Promise<BidView> {
@@ -208,6 +215,7 @@ function setup(store: OperatorStore = new InMemoryOperatorStore()) {
     acceptedBidsHash: 0xabcn,
     bidCount: 0,
     status: "bidding",
+    settlementHash: 0n,
   };
   const vault = new MemoryVault(chain);
   const operator = new WhisperOperator({
@@ -455,6 +463,52 @@ test("constructs a complete Vickrey settlement with private refunds and change",
   assert.equal((await context.store.getSettlement(7n))?.status, "settled");
 });
 
+test("discloses only the verified winner after settlement", async () => {
+  const context = setup();
+  const fixtures = await Promise.all([
+    bidFixture({ auctionId: 7n, bidHandle: 10n, amount: 100n, noteId: 101n, refundRecipient: 0xa01n }),
+    bidFixture({ auctionId: 7n, bidHandle: 20n, amount: 80n, noteId: 102n, refundRecipient: 0xa02n }),
+  ]);
+  context.chain.auction.bidCount = fixtures.length;
+  for (const fixture of fixtures) {
+    context.chain.bids.set(`7:${fixture.bid.bidHandle}`, fixture.bid);
+    context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+    context.vault.notes.push(fixture.note);
+    await context.store.putCapsule(fixture.envelope);
+    assert.equal((await context.operator.ingestSubmission(fixture.event)).status, "funded");
+  }
+
+  assert.deepEqual(await context.operator.getWinnerDisclosure(7n), {
+    status: "pending",
+    auctionId: 7n,
+  });
+  context.setNowSeconds(200);
+  const plan = await context.operator.settleAuction(7n);
+  assert.ok(plan);
+  context.chain.auction.settlementHash = plan.settlementHash;
+  context.chain.result = {
+    auctionId: 7n,
+    hasWinner: true,
+    winnerBidHandle: plan.winnerBidHandle,
+    winnerCommitment: fixtures[0]!.bid.winnerCommitment,
+    winningBid: plan.winningBid,
+    secondHighestBid: plan.secondHighestBid,
+    clearingPrice: plan.clearingPrice,
+    revealsRoot: plan.revealsRoot,
+    outputsRoot: plan.outputsRoot,
+    settlementHash: plan.settlementHash,
+    settledAt: 200,
+  };
+
+  assert.deepEqual(await context.operator.getWinnerDisclosure(7n), {
+    status: "winner",
+    auctionId: 7n,
+    winnerGroupHandle: 10n,
+    winnerCommitment: fixtures[0]!.bid.winnerCommitment,
+    address: 0xa01n,
+  });
+});
+
 test("aggregates additive bid tranches before Vickrey pricing", async () => {
   const context = setup();
   const fixtures = await Promise.all([
@@ -602,6 +656,7 @@ test("serves public vault configuration and accepts idempotent capsule uploads",
   let ready = false;
   const server = createOperatorApi({
     store,
+    coordinatorToken: "a".repeat(32),
     publicConfig: {
       chainId,
       poolAddress,
@@ -612,6 +667,15 @@ test("serves public vault configuration and accepts idempotent capsule uploads",
     },
     readiness: async () => {
       if (!ready) throw new Error("replay note is not ready");
+    },
+    winnerReader: {
+      getWinnerDisclosure: async (auctionId) => ({
+        status: "winner",
+        auctionId,
+        winnerGroupHandle: 0x123n,
+        winnerCommitment: 0x456n,
+        address: 0xa01n,
+      }),
     },
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -652,6 +716,20 @@ test("serves public vault configuration and accepts idempotent capsule uploads",
     });
     assert.equal(first.status, 201);
     assert.equal(second.status, 200);
+
+    const privateWinnerResponse = await fetch(`${baseUrl}/v1/auctions/7/winner`);
+    assert.equal(privateWinnerResponse.status, 401);
+    const winnerResponse = await fetch(`${baseUrl}/v1/auctions/7/winner`, {
+      headers: { Authorization: `Bearer ${"a".repeat(32)}` },
+    });
+    assert.equal(winnerResponse.status, 200);
+    assert.deepEqual(await winnerResponse.json(), {
+      status: "winner",
+      auctionId: "0x7",
+      winnerGroupHandle: "0x123",
+      winnerCommitment: "0x456",
+      address: "0xa01",
+    });
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error === undefined ? resolve() : reject(error))),
@@ -750,6 +828,9 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
     80n, 90n, 100n, 300n,
     0x333n, 0x8n, 0x9n, 0xan, 0xabcn, 2n, 2n, 2n, 0n, 0n,
   ].map(hex);
+  const resultValues = [
+    7n, 1n, 0x6en, 0x77n, 100n, 80n, 80n, 0x88n, 0x99n, 0xaan, 200n,
+  ].map(hex);
   const bid = (handle: bigint, noteId: bigint) =>
     [7n, handle, handle + 100n, 0n, noteId, handle + 2n, handle + 3n, handle + 4n, 80n, 1n, 0n]
       .map(hex);
@@ -757,6 +838,7 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
     async callContract(call: { entrypoint: string; calldata?: readonly string[] }) {
       if (call.entrypoint === "get_pool_address") return [hex(pool)];
       if (call.entrypoint === "get_auction") return auctionValues;
+      if (call.entrypoint === "get_result") return resultValues;
       if (call.entrypoint === "get_bid_handle") {
         return [BigInt(call.calldata?.[1] ?? 0) === 0n ? "0xa" : "0x14"];
       }
@@ -818,6 +900,20 @@ test("decodes Whisper state/events and pool note IDs from Starknet RPC", async (
   const candidates = await chain.candidateVaultNoteIds("0xbbb", 0x333n, 0x444n);
 
   assert.equal(auction.status, "bidding");
+  assert.equal(auction.settlementHash, 0n);
+  assert.deepEqual(await chain.getResult(7n), {
+    auctionId: 7n,
+    hasWinner: true,
+    winnerBidHandle: 0x6en,
+    winnerCommitment: 0x77n,
+    winningBid: 100n,
+    secondHighestBid: 80n,
+    clearingPrice: 80n,
+    revealsRoot: 0x88n,
+    outputsRoot: 0x99n,
+    settlementHash: 0xaan,
+    settledAt: 200,
+  });
   assert.deepEqual(auction.schedule, {
     kind: "absolute",
     biddingDeadline: 90,

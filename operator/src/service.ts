@@ -142,6 +142,7 @@ export async function createOperatorService(
       },
       readiness: ready,
       allowedOrigins: config.allowedOrigins,
+      winnerReader: operator,
       ...(config.coordinatorToken === undefined
         ? {}
         : {

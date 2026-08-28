@@ -9,6 +9,7 @@ import {
 
 import type { OperatorStore } from "./store.ts";
 import type { AuctionCoordinator, CreateAuctionRequest } from "./auction-coordinator.ts";
+import type { WinnerDisclosure } from "./types.ts";
 
 const DEFAULT_BODY_LIMIT = 64 * 1_024;
 
@@ -29,6 +30,7 @@ export interface OperatorApiOptions {
   bodyLimitBytes?: number;
   coordinator?: AuctionCoordinator;
   coordinatorToken?: string;
+  winnerReader?: { getWinnerDisclosure(auctionId: bigint): Promise<WinnerDisclosure> };
 }
 
 export function createOperatorApi(options: OperatorApiOptions): Server {
@@ -70,6 +72,20 @@ export function createOperatorApi(options: OperatorApiOptions): Server {
           status: result,
           revealCommitment: envelope.revealCommitment,
         });
+        return;
+      }
+      const winnerAuctionId = winnerDisclosureAuctionId(url.pathname);
+      if (request.method === "GET" && winnerAuctionId !== undefined) {
+        if (options.winnerReader === undefined || options.coordinatorToken === undefined) {
+          sendJson(response, 404, { error: "not found" });
+          return;
+        }
+        if (!authorized(request, options.coordinatorToken)) {
+          sendJson(response, 401, { error: "unauthorized" });
+          return;
+        }
+        const disclosure = await options.winnerReader.getWinnerDisclosure(winnerAuctionId);
+        sendJson(response, 200, serializeWinnerDisclosure(disclosure));
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/coordinator/auctions") {
@@ -250,6 +266,29 @@ function serializePublicConfig(config: OperatorPublicConfig): Record<string, str
     vaultAddress: hex(config.vaultAddress),
     vaultPublicKey: hex(config.vaultPublicKey),
     revealPublicKey: hex(config.revealPublicKey),
+  };
+}
+
+function winnerDisclosureAuctionId(pathname: string): bigint | undefined {
+  const match = /^\/v1\/auctions\/(0x[0-9a-fA-F]+|[0-9]+)\/winner$/.exec(pathname);
+  if (match === null) return undefined;
+  const value = BigInt(match[1]!);
+  if (value <= 0n || value > 0xffff_ffff_ffff_ffffn) {
+    throw new RequestError(400, "auction ID must be a positive u64");
+  }
+  return value;
+}
+
+function serializeWinnerDisclosure(disclosure: WinnerDisclosure): Record<string, string> {
+  if (disclosure.status !== "winner") {
+    return { status: disclosure.status, auctionId: hex(disclosure.auctionId) };
+  }
+  return {
+    status: disclosure.status,
+    auctionId: hex(disclosure.auctionId),
+    winnerGroupHandle: hex(disclosure.winnerGroupHandle),
+    winnerCommitment: hex(disclosure.winnerCommitment),
+    address: hex(disclosure.address),
   };
 }
 
