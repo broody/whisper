@@ -1,0 +1,117 @@
+{
+  "network": "mainnet",
+  "chainId": "0x534e5f4d41494e",
+  "compiler": {
+    "scarb": "2.13.1",
+    "cairo": "2.13.1",
+    "sierra": "1.7.0"
+  },
+  "privacyPoolAddress": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+  "contractVersion": "0.4.0",
+  "sourceCommit": "24974e012546b3d1a7bd154f6dead8f59cfb251b",
+  "classHash": "0x026965e9f5ec09a83e08e7d3687e0c4d34a475bf9cc64d76f3e2b5e9b3116502",
+  "compiledClassHash": "0x007b999104fbdfae38a9a11bac92adad3031cd696531d7f0170cb013986d4cc1",
+  "declarationTransactionHash": "0x05d31412f07205dd5ce0859f3908526db3e7396411651553cbb8573ade3a5ce4",
+  "declarationBlock": 14068006,
+  "contractAddress": "0x07e50e2acad557379785d671d6dde25cde4e18714470b6619f764233cc12b509",
+  "deploymentMechanism": "Universal Deployer Contract (unique)",
+  "universalDeployerContractAddress": "0x041a78e741e5af2fec34b695679bc6891742439f7afb8484ecd7766661ad02bf",
+  "deploymentSaltInput": "0x7374616b65776172732d6d61696e6e6574",
+  "deploymentTransactionHash": "0x00b8972ab45b441c0671df78065ccd6da2bcc848d2178f78f51d110f3d01fe62",
+  "deploymentBlock": 14068037,
+  "deploymentStatus": "deployed, verified, and Mainnet smoke tested",
+  "upgradeability": {
+    "implementation": "OpenZeppelin UpgradeableComponent 3.0.0",
+    "accessControl": "OpenZeppelin OwnableTwoStep 3.0.0",
+    "owner": "0x03e7984d1b34005f2a7d22f79e9497ffb98faf9746527832374afac2a996551c"
+  },
+  "strkTokenAddress": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+  "poolFeeAmount": "6000000000000000000",
+  "vault": {
+    "address": "0x06f4d80c543c1245be1fac81cde9920c4e47b456f05a20a9c26f6caae0cb1e0c",
+    "accountDeploymentTransactionHash": "0x0152d3cab7527790cb25c9e46d6a4ca610e728230b23b450071b77e9d42d5fb0",
+    "accountDeploymentBlock": 14066756,
+    "viewingPublicKey": "0x03be7c3e8bf11f483209f3320e6b159a5999032b1985798d88605edda79d08c4",
+    "poolRegistrationStatus": "registered and read-verified",
+    "poolRegistrationTransactionHash": "0x06a11a14b6a0db8da3f9d6a0683b05d04e8c919c09c5073b06e40668ec9bb2a7",
+    "poolRegistrationBlock": 14072550,
+    "depositAllowance": {
+      "amount": "1000000000000000000",
+      "transactionHash": "0x03d246eb5ce0438345fb022f24f138ab803062d7637e98bc6deca5904d55d6d9",
+      "block": 14072622
+    },
+    "replayNoteStatus": "one mature vault-originated STRK replay note verified",
+    "replaySeedRotationTransactionHash": "0x031bb9561a11075b55d5e60a5956a6c694240f8be484f9226718a11f4c34f067",
+    "replaySeedRotationBlock": 14073179
+  },
+  "relayer": {
+    "address": "0x019677787a9262a9f7b854ec393180fee1c80dec1e9fbb3d9d028ccd6f92f936",
+    "accountDeploymentTransactionHash": "0x0d464b03666ed3e480a8e4f44de1c2afdc5ee5a73524a65bbec4991e51aa22",
+    "accountDeploymentBlock": 14066761,
+    "poolFeeAllowance": {
+      "amount": "60000000000000000000",
+      "transactionHash": "0x015d4abc0103b92f718d39ab520cd160627571f796d0c6549843b35924c2c3ef",
+      "block": 14072532
+    }
+  },
+  "capsuleRevealPublicKey": "0x02a50e8ed5acb64704255e48d58b8c28b5e36284d6d17760084d81725b16198f",
+  "smokeTest": {
+    "submissionMode": "Ready Wallet standard transfer + invoke path; operator official SDK private acceptance and settlement through the native local prover",
+    "fulfillmentKind": "offchain",
+    "auctionId": "1",
+    "auctionCreationTransactionHash": "0x018d731d0b73abf5a501e3e3e9d297e21cc5008e6a29d32563a9aae227df4cd5",
+    "auctionCreationBlock": 14073793,
+    "biddingDeadline": 1788054087,
+    "forceRevealAfter": 1788054267,
+    "abortAfter": 1788055587,
+    "metadataHash": "0x00fa75d2288cbe396f2f53f4425b10d923bff9c054021a52a894b7374eb80618",
+    "winnerPayloadDomain": "0x5354414b45574152535f415242495445525f5631",
+    "privateBidTransactionHash": "0x02fcc3ef7b4068bc48387ae6b5fe967ae218e446d5bfc44c372fe8447da2caea",
+    "privateBidBlock": 14074323,
+    "groupHandle": "0x0766b6f563072ae0639f11e558f2693d3ba4667e8971bef0010d48f94795153b",
+    "bidHandle": "0x06e174cef91a8ccc43e2dcddd0aa2cb0eceb17b5d8d3eec8079fc5b89d73630f",
+    "fundedNoteId": "0x01d1ad10e0baa2c89f66fd94e9f5591332182205ddefeb7bef160741fe63441c",
+    "acceptanceTransactionHash": "0x0140248724bc427192c942833c861fc0ea72e9399364b041abdef1ebfc5ec3b9",
+    "acceptanceBlock": 14074352,
+    "acceptanceReplayProtection": "consume-and-reissue distinct vault baton note",
+    "settlementTransactionHash": "0x0571f6c1946da7d5247aad0cfc549cbb9633ec92338c938de2b8d54790c4819a",
+    "settlementBlock": 14074630,
+    "settlementStatus": "settled",
+    "winningBid": "1000000000000000",
+    "secondHighestBid": "0",
+    "clearingPrice": "1000000000000000",
+    "settledAt": 1788054297,
+    "eventHistoryVerified": [
+      "AuctionCreated",
+      "BidSubmitted",
+      "BidFunded",
+      "BidRevealed",
+      "AuctionSettled"
+    ],
+    "submissionCount": 1,
+    "fundedBidCount": 1,
+    "winnerDisclosureVerified": true,
+    "successorAuctionRegistered": true
+  },
+  "operatorActivation": {
+    "status": "local Mainnet rehearsal complete",
+    "prover": {
+      "runtime": "native macOS ARM64, loopback-only",
+      "sourceTag": "APOLLO-0.14.3-RC.15",
+      "sourceCommit": "12cf3b7d4a55478183662523c10eddb1d71243bf",
+      "rpcSpecVersion": "0.10.3-rc.2",
+      "pathfinderStateTries": 10000,
+      "registrationProofVerifiedOnchain": true
+    },
+    "localApi": {
+      "health": "ok",
+      "readiness": "ready"
+    },
+    "screening": {
+      "requiredForDeposits": true,
+      "screenerPublicKey": "0x0501cc452e5a4370e2f0879c9a863b3efc915005817487460b23a8d6ef88fdb2",
+      "status": "not configured locally; initial shielding completed through Ready"
+    },
+    "readinessVerification": "A Ready-originated private STRK note was rotated through the local prover into one mature vault-originated replay note; GET /readyz returned HTTP 200. The same local operator then accepted, force-revealed, and settled Mainnet auction 1, disclosed its verified winner to Stake Wars, and allowed the API to register a successor round."
+  }
+}

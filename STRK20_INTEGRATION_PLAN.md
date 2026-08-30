@@ -81,6 +81,8 @@ The standard-invoke class is deployed on Sepolia and a direct official-SDK trans
 
 Mainnet registration, deployment, and transactions require explicit approval when this phase begins.
 
+Mainnet checkpoint 2026-08-30: the verified v0.4 Whisper contract and its dedicated vault/relayer were deployed with explicit approval. A native ARM64 build of the official transaction prover (`APOLLO-0.14.3-RC.15`, sequencer `12cf3b7d4a55478183662523c10eddb1d71243bf`) produced a registration proof locally against Pathfinder v0.10 with `PATHFINDER_STORAGE_STATE_TRIES=10000`; the proof-backed vault registration succeeded onchain in block 14072550. A direct local seed deposit correctly reverted with `SCREENING_REQUIRED`, so the initial private STRK note was shielded through Ready's canonical screened path instead. The local prover then consumed that Ready-originated note and rotated it back to the vault in block 14073179, producing one mature vault-originated replay note. Mainnet auction 1 subsequently completed a Ready Wallet bid, replay-protected operator acceptance, force reveal, settlement, verified winner disclosure, and successor-round registration. Public operator deployment, durable replay-note inventory, backup/recovery, and production monitoring remain pending.
+
 ## 8a. Local operator runtime and replay safety ✅ done 2026-08-27
 
 1. Consume and reissue a separate mature, vault-originated STRK note beside every `AcceptBid` callback so the canonical pool receives a nullifier without spending bidder escrow.
@@ -137,8 +139,8 @@ Sepolia validation completed 2026-08-24: v0.3 was declared and deployed at `0x03
 - Register the verified v0.3 offchain auction as a canonical Stake Wars round when the API's explicit admin procedure is implemented; no production API database or Fly deployment was changed during the contract smoke test.
 - Exercise ERC-721, ERC-1155, and winning token-claim flows on Sepolia with dedicated reviewed test tokens; the live v0.3 smoke currently covers offchain settlement plus ERC-20 escrow and timeout reclaim.
 - Confirm whether the alpha-Sepolia proving and discovery services are formally supported for sprint teams; until then, treat them as replaceable test infrastructure.
-- Run a self-hosted transaction prover for mainnet operator settlement; bidders should shield through a privacy-enabled wallet so the operator prover does not need to originate screened deposits.
-- Provision and monitor a durable inventory of small vault-owned replay-protection notes; local rotation is implemented, but multi-process leasing and capacity alerts are not.
+- Move the working native Mainnet prover to the dedicated VPS and keep its RPC and metrics private; the local proof and onchain registration path is verified, but production deployment remains pending.
+- Provision and monitor a durable inventory of small vault-owned replay-protection notes through the canonical screening path; local rotation is implemented, but initial seeding, multi-process leasing, and capacity alerts are not.
 - Re-verify the exact production sizing and maturity requirements for consecutive replay-baton rotations under bid bursts.
 - Capsule cryptographic review and key-rotation policy.
 - Committee-ready custody remains deferred in [GitHub issue #1](https://github.com/broody/whisper/issues/1) until the Sepolia end-to-end path works.
