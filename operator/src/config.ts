@@ -17,6 +17,7 @@ export interface OperatorRuntimeConfig {
   allowedOrigins: string[];
   deploymentBlock: number;
   provingBlockLag: number;
+  provingTimeoutMilliseconds: number;
   apiHost: string;
   apiPort: number;
   pollIntervalMilliseconds: number;
@@ -66,6 +67,11 @@ export function loadOperatorRuntimeConfig(
       minimum: 0,
       maximum: 10_000,
     }),
+    provingTimeoutMilliseconds: optionalInteger(
+      environment.WHISPER_PROVING_TIMEOUT_MS,
+      30_000,
+      { minimum: 1_000, maximum: 86_400_000 },
+    ),
     apiHost: environment.WHISPER_API_HOST ?? "127.0.0.1",
     apiPort: optionalInteger(environment.WHISPER_API_PORT, 8081, { minimum: 1, maximum: 65_535 }),
     pollIntervalMilliseconds: optionalInteger(environment.WHISPER_POLL_INTERVAL_MS, 10_000, {

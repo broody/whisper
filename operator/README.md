@@ -109,6 +109,8 @@ Set `WHISPER_NETWORK=sepolia` to use the deployed Sepolia privacy pool, PublicNo
 
 `WHISPER_PROVING_BLOCK_LAG` defaults to 10. Each proof uses the current RPC head minus this lag so the resulting proof fact is old enough for the pool's acceptance window; do not replace it with `latest` unless the deployed pool explicitly accepts proofs from the head block.
 
+`WHISPER_PROVING_TIMEOUT_MS` defaults to the official SDK's 30-second request timeout. A slower self-hosted prover must set this above its worst-case proof duration. Otherwise the client disconnects while the server-side blocking proof can continue, and the worker's next retry can overlap it and exhaust the host's memory.
+
 The hosted alpha-Sepolia services have no published availability commitment. They are suitable for integration testing, while mainnet must use explicitly configured infrastructure; see the [SDK proving configuration](https://strk20-by-example.org/sdk/proving-config).
 
 The hosted discovery service receives the vault viewing key needed to discover notes, and the hosted prover processes the vault's private proof request. Treat both service operators as part of the Sepolia test trust boundary, use disposable accounts and test funds only, and self-host both components for the intended mainnet operator-only custody model.

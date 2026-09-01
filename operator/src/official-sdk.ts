@@ -28,6 +28,7 @@ export interface OfficialPrivacySdkModule {
       url: string;
       chainId: constants.StarknetChainId;
       nodeUrl: string;
+      requestTimeoutMs?: number;
     };
     discoveryProvider: DiscoveryProviderConfig | DiscoveryProviderInterface;
     poolContractAddress: BigNumberish;
@@ -48,6 +49,7 @@ export interface OfficialVaultRuntimeOptions {
   replayTokenAddress: bigint;
   submitter: ProofSubmitter;
   provingBlockIdProvider?: () => Promise<BlockIdentifier>;
+  provingTimeoutMilliseconds?: number;
   /** Test/embedding override; production loads the optional peer package. */
   sdkModule?: OfficialPrivacySdkModule;
 }
@@ -70,6 +72,9 @@ export async function createOfficialVaultRuntime(
       url: requiredHttpUrl("provingUrl", options.provingUrl),
       chainId: options.chainId,
       nodeUrl: requiredHttpUrl("rpcUrl", options.rpcUrl),
+      ...(options.provingTimeoutMilliseconds === undefined
+        ? {}
+        : { requestTimeoutMs: options.provingTimeoutMilliseconds }),
     },
     discoveryProvider,
     poolContractAddress: options.poolAddress,

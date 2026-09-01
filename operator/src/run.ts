@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { Account, RpcProvider } from "starknet";
 
 import { loadOperatorRuntimeConfig } from "./config.ts";
+import { OperatorCircuitBreakerError } from "./engine.ts";
 import { loadOperatorSecretMaterial } from "./runtime-secrets.ts";
 import { createOperatorService } from "./service.ts";
 
@@ -82,6 +83,6 @@ const entrypoint = process.argv[1];
 if (entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href) {
   runOperator().catch((error: unknown) => {
     console.error(`Whisper operator failed: ${safeError(error)}`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof OperatorCircuitBreakerError ? 78 : 1;
   });
 }

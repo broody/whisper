@@ -1,4 +1,4 @@
-import type { WhisperOperator } from "./engine.ts";
+import { OperatorCircuitBreakerError, type WhisperOperator } from "./engine.ts";
 import type { OperatorStore } from "./store.ts";
 import type { Clock, WhisperChainPort, WhisperEventSource } from "./types.ts";
 import { systemClock } from "./types.ts";
@@ -93,6 +93,7 @@ export class OperatorWorker {
         await this.operator.processSubmission(submission.auctionId, submission.bidHandle);
       } catch (error) {
         this.options.onError?.(error, `submission:${submission.auctionId}:${submission.bidHandle}`);
+        if (error instanceof OperatorCircuitBreakerError) throw error;
       }
       result.submissionsProcessed += 1;
     }
@@ -111,6 +112,7 @@ export class OperatorWorker {
         }
       } catch (error) {
         this.options.onError?.(error, `settlement:${auctionId}`);
+        if (error instanceof OperatorCircuitBreakerError) throw error;
       }
     }
     return result;
@@ -122,6 +124,7 @@ export class OperatorWorker {
         await this.runOnce();
       } catch (error) {
         this.options.onError?.(error, "worker");
+        if (error instanceof OperatorCircuitBreakerError) throw error;
       }
       await abortableDelay(this.pollIntervalMilliseconds, signal);
     }

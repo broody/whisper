@@ -28,7 +28,7 @@ import { createOperatorApi } from "./api.ts";
 import { AuctionCoordinator } from "./auction-coordinator.ts";
 import { WhisperSdkCapsuleCipher } from "./capsule-cipher.ts";
 import { loadOperatorRuntimeConfig } from "./config.ts";
-import { WhisperOperator } from "./engine.ts";
+import { OperatorCircuitBreakerError, WhisperOperator } from "./engine.ts";
 import { SEPOLIA_OPERATOR_NETWORK } from "./networks.ts";
 import { createOfficialVaultRuntime, type OfficialPrivacySdkModule } from "./official-sdk.ts";
 import { AuctionRecovery } from "./recovery.ts";
@@ -276,12 +276,51 @@ test("retries while the transaction-scoped note is waiting for discovery", async
 
   const waiting = await context.operator.ingestSubmission(fixture.event);
   assert.equal(waiting.status, "retry");
+  assert.equal(waiting.failedAttempts, 0);
   assert.match(waiting.error ?? "", /not discoverable yet/);
 
   context.vault.notes.push(fixture.note);
   const funded = await context.operator.processSubmission(7n, 10n);
   assert.equal(funded.status, "funded");
   assert.equal(funded.noteId, 101n);
+});
+
+test("opens the circuit breaker after three private acceptance failures", async () => {
+  const context = setup();
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    amount: 100n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+  context.vault.notes.push(fixture.note);
+  context.vault.acceptBid = async () => {
+    const error = new Error("RPC request details");
+    Object.assign(error, { baseError: { code: 41, message: "fee estimation failed" } });
+    throw error;
+  };
+  await context.store.putCapsule(fixture.envelope);
+
+  const first = await context.operator.ingestSubmission(fixture.event);
+  assert.equal(first.status, "retry");
+  assert.equal(first.failedAttempts, 1);
+  assert.equal(first.error, "41: fee estimation failed");
+
+  const second = await context.operator.processSubmission(7n, 10n);
+  assert.equal(second.status, "retry");
+  assert.equal(second.failedAttempts, 2);
+
+  await assert.rejects(
+    context.operator.processSubmission(7n, 10n),
+    OperatorCircuitBreakerError,
+  );
+  const stopped = await context.store.getSubmission(7n, 10n);
+  assert.equal(stopped?.status, "retry");
+  assert.equal(stopped?.failedAttempts, 3);
+  assert.equal(stopped?.error, "41: fee estimation failed");
 });
 
 test("rejects a discovered vault note whose amount does not match the capsule", async () => {
@@ -461,6 +500,40 @@ test("constructs a complete Vickrey settlement with private refunds and change",
     plan.notes.reduce((sum, note) => sum + note.amount, 0n),
   );
   assert.equal((await context.store.getSettlement(7n))?.status, "settled");
+});
+
+test("opens the circuit breaker after three private settlement failures", async () => {
+  const context = setup();
+  const fixture = await bidFixture({
+    auctionId: 7n,
+    bidHandle: 10n,
+    amount: 100n,
+    noteId: 101n,
+    refundRecipient: 0xa01n,
+  });
+  context.chain.auction.bidCount = 1;
+  context.chain.bids.set("7:10", fixture.bid);
+  context.chain.candidates.set(fixture.event.transactionHash, [fixture.note.id]);
+  context.vault.notes.push(fixture.note);
+  await context.store.putCapsule(fixture.envelope);
+  assert.equal((await context.operator.ingestSubmission(fixture.event)).status, "funded");
+
+  context.vault.settle = async () => {
+    const error = new Error("RPC request details");
+    Object.assign(error, { baseError: { code: 41, message: "fee estimation failed" } });
+    throw error;
+  };
+  context.setNowSeconds(200);
+
+  await assert.rejects(context.operator.settleAuction(7n), /RPC request details/);
+  assert.equal((await context.store.getSettlement(7n))?.failedAttempts, 1);
+  await assert.rejects(context.operator.settleAuction(7n), /RPC request details/);
+  assert.equal((await context.store.getSettlement(7n))?.failedAttempts, 2);
+  await assert.rejects(context.operator.settleAuction(7n), OperatorCircuitBreakerError);
+  const stopped = await context.store.getSettlement(7n);
+  assert.equal(stopped?.status, "retry");
+  assert.equal(stopped?.failedAttempts, 3);
+  assert.equal(stopped?.error, "41: fee estimation failed");
 });
 
 test("discloses only the verified winner after settlement", async () => {
@@ -1022,6 +1095,33 @@ test("scans finalized events into durable worker state and schedules ready aucti
   assert.deepEqual(await store.listTrackedAuctions(), [7n]);
 });
 
+test("propagates an open circuit breaker out of the worker", async () => {
+  const store = new InMemoryOperatorStore();
+  await store.recordSubmission({
+    auctionId: 7n,
+    bidHandle: 10n,
+    transactionHash: "0xbbb",
+    blockNumber: 1,
+  });
+  const operator = {
+    processSubmission: async () => {
+      throw new OperatorCircuitBreakerError("open");
+    },
+  } as unknown as WhisperOperator;
+  const worker = new OperatorWorker(
+    operator,
+    {} as WhisperChainPort,
+    {
+      getFinalizedBlockNumber: async () => 0,
+      scanEvents: async () => ({ auctions: [], submissions: [] }),
+    },
+    store,
+    { deploymentBlock: 1 },
+  );
+
+  await assert.rejects(worker.runOnce(), OperatorCircuitBreakerError);
+});
+
 test("composes the official SDK with injected key and provider boundaries", async () => {
   let captured: Parameters<OfficialPrivacySdkModule["createPrivateTransfers"]>[0] | undefined;
   const transfers = {
@@ -1049,6 +1149,7 @@ test("composes the official SDK with injected key and provider boundaries", asyn
     vaultAddress,
     replayTokenAddress: 0x444n,
     submitter: { submit: async () => ({ transactionHash: "0x1" }) },
+    provingTimeoutMilliseconds: 900_000,
     sdkModule,
   });
 
@@ -1056,6 +1157,7 @@ test("composes the official SDK with injected key and provider boundaries", asyn
   assert.equal(captured?.viewingKeyProvider, viewingKeyProvider);
   assert.equal(captured?.poolContractAddress, poolAddress);
   assert.equal(captured?.provingProvider.chainId, constants.StarknetChainId.SN_MAIN);
+  assert.equal(captured?.provingProvider.requestTimeoutMs, 900_000);
   assert.deepEqual(captured?.discoveryProvider, { url: "https://discovery.example.com/" });
 });
 
@@ -1446,12 +1548,14 @@ test("loads the Sepolia prover, discovery, RPC, and pool preset", () => {
   assert.equal(config.replayTokenAddress, SEPOLIA_OPERATOR_NETWORK.replayTokenAddress);
   assert.equal(config.proceedsRecipient, 0x222n);
   assert.equal(config.provingBlockLag, 10);
+  assert.equal(config.provingTimeoutMilliseconds, 30_000);
 });
 
 test("allows explicit endpoint overrides on the Sepolia preset", () => {
   const config = loadOperatorRuntimeConfig({
     WHISPER_NETWORK: "sepolia",
     WHISPER_PROVING_URL: "https://self-hosted-prover.example",
+    WHISPER_PROVING_TIMEOUT_MS: "3600000",
     WHISPER_CONTRACT_ADDRESS: "0x111",
     WHISPER_VAULT_ADDRESS: "0x222",
     WHISPER_VAULT_PUBLIC_KEY: "0x333",
@@ -1461,6 +1565,7 @@ test("allows explicit endpoint overrides on the Sepolia preset", () => {
   });
 
   assert.equal(config.provingUrl, "https://self-hosted-prover.example/");
+  assert.equal(config.provingTimeoutMilliseconds, 3_600_000);
   assert.equal(config.discoveryUrl, `${SEPOLIA_OPERATOR_NETWORK.discoveryUrl}/`);
   assert.equal(config.proceedsRecipient, 0x555n);
 });
@@ -1587,6 +1692,7 @@ test("assembles and validates the service without persisting its key material", 
       allowedOrigins: [],
       deploymentBlock: 1,
       provingBlockLag: 10,
+      provingTimeoutMilliseconds: 30_000,
       apiHost: "127.0.0.1",
       apiPort: 8081,
       pollIntervalMilliseconds: 10_000,
