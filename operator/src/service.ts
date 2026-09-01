@@ -78,6 +78,7 @@ export async function createOperatorService(
       vaultAddress: config.vaultAddress,
       replayTokenAddress: config.replayTokenAddress,
       submitter,
+      provingTimeoutMilliseconds: config.provingTimeoutMilliseconds,
       provingBlockIdProvider: async () =>
         Math.max((await dependencies.provider.getBlockNumber()) - config.provingBlockLag, 0),
       ...(dependencies.sdkModule === undefined ? {} : { sdkModule: dependencies.sdkModule }),

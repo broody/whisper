@@ -9,6 +9,7 @@ export type RecoveryStatus = "recovering" | "failed" | "completed";
 export interface SubmissionRecord extends BidSubmissionEvent {
   status: SubmissionStatus;
   updatedAt: number;
+  failedAttempts: number;
   noteId?: bigint;
   transactionHashResult?: string;
   error?: string;
@@ -18,6 +19,7 @@ export interface SettlementRecord {
   auctionId: bigint;
   status: SettlementStatus;
   updatedAt: number;
+  failedAttempts: number;
   transactionHash?: string;
   error?: string;
 }
@@ -47,6 +49,11 @@ export interface OperatorStore {
   getSubmission(auctionId: bigint, bidHandle: bigint): Promise<SubmissionRecord | undefined>;
   claimSubmission(auctionId: bigint, bidHandle: bigint): Promise<boolean>;
   markSubmissionRetry(auctionId: bigint, bidHandle: bigint, error: string): Promise<void>;
+  markSubmissionAttemptFailed(
+    auctionId: bigint,
+    bidHandle: bigint,
+    error: string,
+  ): Promise<number>;
   markSubmissionRejected(auctionId: bigint, bidHandle: bigint, error: string): Promise<void>;
   markSubmissionFunded(
     auctionId: bigint,
@@ -58,6 +65,7 @@ export interface OperatorStore {
   getSettlement(auctionId: bigint): Promise<SettlementRecord | undefined>;
   claimSettlement(auctionId: bigint): Promise<boolean>;
   markSettlementRetry(auctionId: bigint, error: string): Promise<void>;
+  markSettlementAttemptFailed(auctionId: bigint, error: string): Promise<number>;
   markSettlementComplete(auctionId: bigint, transactionHash: string): Promise<void>;
 
   trackAuction(auctionId: bigint): Promise<void>;
@@ -113,7 +121,12 @@ export class InMemoryOperatorStore implements OperatorStore {
     const key = submissionKey(event.auctionId, event.bidHandle);
     const current = this.submissions.get(key);
     if (current !== undefined) return structuredClone(current);
-    const created: SubmissionRecord = { ...event, status: "received", updatedAt: Date.now() };
+    const created: SubmissionRecord = {
+      ...event,
+      status: "received",
+      updatedAt: Date.now(),
+      failedAttempts: 0,
+    };
     this.submissions.set(key, created);
     return structuredClone(created);
   }
@@ -138,6 +151,19 @@ export class InMemoryOperatorStore implements OperatorStore {
 
   async markSubmissionRetry(auctionId: bigint, bidHandle: bigint, error: string): Promise<void> {
     this.updateSubmission(auctionId, bidHandle, { status: "retry", error });
+  }
+
+  async markSubmissionAttemptFailed(
+    auctionId: bigint,
+    bidHandle: bigint,
+    error: string,
+  ): Promise<number> {
+    const key = submissionKey(auctionId, bidHandle);
+    const value = this.submissions.get(key);
+    if (value === undefined) throw new Error("submission is not recorded");
+    value.failedAttempts += 1;
+    this.updateSubmission(auctionId, bidHandle, { status: "retry", error });
+    return value.failedAttempts;
   }
 
   async markSubmissionRejected(auctionId: bigint, bidHandle: bigint, error: string): Promise<void> {
@@ -168,17 +194,37 @@ export class InMemoryOperatorStore implements OperatorStore {
     const key = auctionId.toString();
     const current = this.settlements.get(key);
     if (current?.status === "settled" || current?.status === "settling") return false;
-    this.settlements.set(key, { auctionId, status: "settling", updatedAt: Date.now() });
+    this.settlements.set(key, {
+      auctionId,
+      status: "settling",
+      updatedAt: Date.now(),
+      failedAttempts: current?.failedAttempts ?? 0,
+    });
     return true;
   }
 
   async markSettlementRetry(auctionId: bigint, error: string): Promise<void> {
+    const current = this.settlements.get(auctionId.toString());
     this.settlements.set(auctionId.toString(), {
       auctionId,
       status: "retry",
       error,
       updatedAt: Date.now(),
+      failedAttempts: current?.failedAttempts ?? 0,
     });
+  }
+
+  async markSettlementAttemptFailed(auctionId: bigint, error: string): Promise<number> {
+    const current = this.settlements.get(auctionId.toString());
+    const failedAttempts = (current?.failedAttempts ?? 0) + 1;
+    this.settlements.set(auctionId.toString(), {
+      auctionId,
+      status: "retry",
+      error,
+      updatedAt: Date.now(),
+      failedAttempts,
+    });
+    return failedAttempts;
   }
 
   async markSettlementComplete(auctionId: bigint, transactionHash: string): Promise<void> {
@@ -187,6 +233,7 @@ export class InMemoryOperatorStore implements OperatorStore {
       status: "settled",
       transactionHash,
       updatedAt: Date.now(),
+      failedAttempts: this.settlements.get(auctionId.toString())?.failedAttempts ?? 0,
     });
   }
 
@@ -227,6 +274,7 @@ export class InMemoryOperatorStore implements OperatorStore {
       if (submission.status === "accepting" && submission.updatedAt < staleBefore) {
         submission.status = "retry";
         submission.error = "recovered stale acceptance lease";
+        submission.failedAttempts += 1;
         submission.updatedAt = Date.now();
         recovered += 1;
       }
@@ -235,6 +283,7 @@ export class InMemoryOperatorStore implements OperatorStore {
       if (settlement.status === "settling" && settlement.updatedAt < staleBefore) {
         settlement.status = "retry";
         settlement.error = "recovered stale settlement lease";
+        settlement.failedAttempts += 1;
         settlement.updatedAt = Date.now();
         recovered += 1;
       }

@@ -29,6 +29,11 @@ import {
 
 export class RetryableOperatorError extends Error {}
 export class RejectedBidError extends Error {}
+export class OperatorCircuitBreakerError extends Error {
+  override readonly name = "OperatorCircuitBreakerError";
+}
+
+const MAX_PRIVATE_TRANSACTION_FAILURES = 3;
 
 export interface WhisperOperatorDependencies {
   chain: WhisperChainPort;
@@ -37,13 +42,23 @@ export interface WhisperOperatorDependencies {
   store: OperatorStore;
   proceedsRecipients: ProceedsRecipientProvider;
   clock?: Clock;
+  maxPrivateTransactionFailures?: number;
 }
 
 export class WhisperOperator {
   private readonly clock: Clock;
+  private readonly maxPrivateTransactionFailures: number;
 
   constructor(private readonly dependencies: WhisperOperatorDependencies) {
     this.clock = dependencies.clock ?? systemClock;
+    this.maxPrivateTransactionFailures =
+      dependencies.maxPrivateTransactionFailures ?? MAX_PRIVATE_TRANSACTION_FAILURES;
+    if (
+      !Number.isSafeInteger(this.maxPrivateTransactionFailures) ||
+      this.maxPrivateTransactionFailures <= 0
+    ) {
+      throw new RangeError("maxPrivateTransactionFailures must be a positive integer");
+    }
   }
 
   async ingestSubmission(event: BidSubmissionEvent): Promise<SubmissionRecord> {
@@ -57,6 +72,7 @@ export class WhisperOperator {
     if (record === undefined) throw new Error("submission is not recorded");
     if (record.status === "funded" || record.status === "rejected") return record;
 
+    let claimed = false;
     try {
       const [auction, bid] = await Promise.all([
         chain.getAuction(auctionId),
@@ -70,6 +86,9 @@ export class WhisperOperator {
           "reconciled-onchain",
         );
         return (await store.getSubmission(auctionId, bidHandle))!;
+      }
+      if (record.failedAttempts >= this.maxPrivateTransactionFailures) {
+        throw circuitBreaker("bid acceptance", auctionId, record.failedAttempts);
       }
       if (auction.status !== "bidding") throw new RejectedBidError("auction is not bidding");
       if (this.clock.nowSeconds() >= auction.forceRevealAfter) {
@@ -111,15 +130,25 @@ export class WhisperOperator {
       const note = matchingNotes[0]!;
       validateOpening(bid, note, opening);
 
-      const claimed = await store.claimSubmission(auctionId, bidHandle);
+      claimed = await store.claimSubmission(auctionId, bidHandle);
       if (!claimed) return (await store.getSubmission(auctionId, bidHandle))!;
       const result = await vault.acceptBid(auctionId, bidHandle, note.id);
       await store.markSubmissionFunded(auctionId, bidHandle, note.id, result.transactionHash);
       return (await store.getSubmission(auctionId, bidHandle))!;
     } catch (error) {
       const message = safeError(error);
+      if (error instanceof OperatorCircuitBreakerError) throw error;
       if (error instanceof RejectedBidError) {
         await store.markSubmissionRejected(auctionId, bidHandle, message);
+      } else if (claimed) {
+        const failedAttempts = await store.markSubmissionAttemptFailed(
+          auctionId,
+          bidHandle,
+          message,
+        );
+        if (failedAttempts >= this.maxPrivateTransactionFailures) {
+          throw circuitBreaker("bid acceptance", auctionId, failedAttempts, message);
+        }
       } else {
         await store.markSubmissionRetry(auctionId, bidHandle, message);
       }
@@ -134,6 +163,10 @@ export class WhisperOperator {
       await store.markSettlementComplete(auctionId, "reconciled-onchain");
       return undefined;
     }
+    const settlement = await store.getSettlement(auctionId);
+    if ((settlement?.failedAttempts ?? 0) >= this.maxPrivateTransactionFailures) {
+      throw circuitBreaker("auction settlement", auctionId, settlement!.failedAttempts);
+    }
     if (auction.status !== "bidding") throw new Error("auction is not settleable");
     const now = this.clock.nowSeconds();
     if (now < auction.forceRevealAfter) throw new RetryableOperatorError("force reveal has not opened");
@@ -142,6 +175,7 @@ export class WhisperOperator {
     const claimed = await store.claimSettlement(auctionId);
     if (!claimed) return undefined;
 
+    let privateExecutionStarted = false;
     try {
       const proceedsRecipient = await this.dependencies.proceedsRecipients.getProceedsRecipient(
         auctionId,
@@ -207,11 +241,21 @@ export class WhisperOperator {
         outputsRoot,
         settlementHash,
       };
+      privateExecutionStarted = true;
       const result = await vault.settle(plan);
       await store.markSettlementComplete(auctionId, result.transactionHash);
       return plan;
     } catch (error) {
-      await store.markSettlementRetry(auctionId, safeError(error));
+      if (error instanceof OperatorCircuitBreakerError) throw error;
+      const message = safeError(error);
+      if (privateExecutionStarted) {
+        const failedAttempts = await store.markSettlementAttemptFailed(auctionId, message);
+        if (failedAttempts >= this.maxPrivateTransactionFailures) {
+          throw circuitBreaker("auction settlement", auctionId, failedAttempts, message);
+        }
+      } else {
+        await store.markSettlementRetry(auctionId, message);
+      }
       throw error;
     }
   }
@@ -387,6 +431,31 @@ function unique(values: readonly bigint[]): Set<string> {
 }
 
 function safeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "unknown operator error";
+  const baseError = isRecord(error) && isRecord(error.baseError) ? error.baseError : undefined;
+  const baseMessage = baseError?.message;
+  const baseCode = baseError?.code;
+  const message =
+    typeof baseMessage === "string"
+      ? `${typeof baseCode === "string" || typeof baseCode === "number" ? `${baseCode}: ` : ""}${baseMessage}`
+      : error instanceof Error
+        ? error.message
+        : "unknown operator error";
   return message.slice(0, 500);
+}
+
+function circuitBreaker(
+  operation: string,
+  auctionId: bigint,
+  failedAttempts: number,
+  reason?: string,
+): OperatorCircuitBreakerError {
+  return new OperatorCircuitBreakerError(
+    `${operation} circuit breaker opened for auction ${auctionId} after ${failedAttempts} failed attempts${
+      reason === undefined ? "" : `: ${reason}`
+    }`,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

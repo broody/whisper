@@ -24,6 +24,7 @@ interface SubmissionRow {
   result_tx_hash: string | null;
   error: string | null;
   updated_at: number;
+  failed_attempts: number;
 }
 
 interface SettlementRow {
@@ -32,6 +33,7 @@ interface SettlementRow {
   transaction_hash: string | null;
   error: string | null;
   updated_at: number;
+  failed_attempts: number;
 }
 
 interface AuctionCreationRow {
@@ -75,6 +77,7 @@ export class SqliteOperatorStore implements OperatorStore {
         note_id TEXT,
         result_tx_hash TEXT,
         error TEXT,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (auction_id, bid_handle)
       ) STRICT;
@@ -84,6 +87,7 @@ export class SqliteOperatorStore implements OperatorStore {
         status TEXT NOT NULL CHECK (status IN ('pending','settling','retry','settled')),
         transaction_hash TEXT,
         error TEXT,
+        failed_attempts INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       ) STRICT;
 
@@ -113,6 +117,16 @@ export class SqliteOperatorStore implements OperatorStore {
         updated_at INTEGER NOT NULL
       ) STRICT;
     `);
+    this.addColumnIfMissing(
+      "submissions",
+      "failed_attempts",
+      "INTEGER NOT NULL DEFAULT 0",
+    );
+    this.addColumnIfMissing(
+      "settlements",
+      "failed_attempts",
+      "INTEGER NOT NULL DEFAULT 0",
+    );
   }
 
   close(): void {
@@ -189,6 +203,25 @@ export class SqliteOperatorStore implements OperatorStore {
     this.updateSubmission(auctionId, bidHandle, "retry", undefined, undefined, error);
   }
 
+  async markSubmissionAttemptFailed(
+    auctionId: bigint,
+    bidHandle: bigint,
+    error: string,
+  ): Promise<number> {
+    const row = this.database
+      .prepare(
+        `UPDATE submissions SET status = 'retry', note_id = NULL, result_tx_hash = NULL,
+           error = ?, failed_attempts = failed_attempts + 1, updated_at = ?
+         WHERE auction_id = ? AND bid_handle = ?
+         RETURNING failed_attempts`,
+      )
+      .get(error, Date.now(), auctionId.toString(), bidHandle.toString()) as
+      | { failed_attempts: number }
+      | undefined;
+    if (row === undefined) throw new Error("submission is not recorded");
+    return row.failed_attempts;
+  }
+
   async markSubmissionRejected(auctionId: bigint, bidHandle: bigint, error: string): Promise<void> {
     this.updateSubmission(auctionId, bidHandle, "rejected", undefined, undefined, error);
   }
@@ -211,6 +244,7 @@ export class SqliteOperatorStore implements OperatorStore {
       auctionId: BigInt(row.auction_id),
       status: row.status,
       updatedAt: row.updated_at,
+      failedAttempts: row.failed_attempts,
       ...(row.transaction_hash === null ? {} : { transactionHash: row.transaction_hash }),
       ...(row.error === null ? {} : { error: row.error }),
     };
@@ -232,13 +266,28 @@ export class SqliteOperatorStore implements OperatorStore {
   async markSettlementRetry(auctionId: bigint, error: string): Promise<void> {
     this.database
       .prepare(
-        `INSERT INTO settlements (auction_id, status, error, updated_at)
-         VALUES (?, 'retry', ?, ?)
+        `INSERT INTO settlements (auction_id, status, error, failed_attempts, updated_at)
+         VALUES (?, 'retry', ?, 0, ?)
          ON CONFLICT (auction_id) DO UPDATE SET
            status = 'retry', transaction_hash = NULL, error = excluded.error,
            updated_at = excluded.updated_at`,
       )
       .run(auctionId.toString(), error, Date.now());
+  }
+
+  async markSettlementAttemptFailed(auctionId: bigint, error: string): Promise<number> {
+    const row = this.database
+      .prepare(
+        `INSERT INTO settlements (auction_id, status, error, failed_attempts, updated_at)
+         VALUES (?, 'retry', ?, 1, ?)
+         ON CONFLICT (auction_id) DO UPDATE SET
+           status = 'retry', transaction_hash = NULL, error = excluded.error,
+           failed_attempts = settlements.failed_attempts + 1, updated_at = excluded.updated_at
+         RETURNING failed_attempts`,
+      )
+      .get(auctionId.toString(), error, Date.now()) as { failed_attempts: number } | undefined;
+    if (row === undefined) throw new Error("failed to record settlement attempt failure");
+    return row.failed_attempts;
   }
 
   async markSettlementComplete(auctionId: bigint, transactionHash: string): Promise<void> {
@@ -311,13 +360,15 @@ export class SqliteOperatorStore implements OperatorStore {
     const submissions = this.database
       .prepare(
         `UPDATE submissions SET status = 'retry', error = 'recovered stale acceptance lease',
-           updated_at = ? WHERE status = 'accepting' AND updated_at < ?`,
+           failed_attempts = failed_attempts + 1, updated_at = ?
+         WHERE status = 'accepting' AND updated_at < ?`,
       )
       .run(now, staleBefore);
     const settlements = this.database
       .prepare(
         `UPDATE settlements SET status = 'retry', error = 'recovered stale settlement lease',
-           updated_at = ? WHERE status = 'settling' AND updated_at < ?`,
+           failed_attempts = failed_attempts + 1, updated_at = ?
+         WHERE status = 'settling' AND updated_at < ?`,
       )
       .run(now, staleBefore);
     return Number(submissions.changes) + Number(settlements.changes);
@@ -449,6 +500,15 @@ export class SqliteOperatorStore implements OperatorStore {
       );
     if (!changed(result)) throw new Error("submission is not recorded");
   }
+
+  private addColumnIfMissing(table: string, column: string, definition: string): void {
+    const columns = this.database.prepare(`PRAGMA table_info(${table})`).all() as unknown as {
+      name: string;
+    }[];
+    if (!columns.some((candidate) => candidate.name === column)) {
+      this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  }
 }
 
 function changed(result: StatementResultingChanges): boolean {
@@ -463,6 +523,7 @@ function submissionFromRow(row: SubmissionRow): SubmissionRecord {
     blockNumber: row.block_number,
     status: row.status,
     updatedAt: row.updated_at,
+    failedAttempts: row.failed_attempts,
     ...(row.note_id === null ? {} : { noteId: BigInt(row.note_id) }),
     ...(row.result_tx_hash === null ? {} : { transactionHashResult: row.result_tx_hash }),
     ...(row.error === null ? {} : { error: row.error }),
